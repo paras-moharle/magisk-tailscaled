@@ -9,6 +9,7 @@ export TS_MOD_PROP="${TS_MOD_DIR}/module.prop"
 
 # Set tailscale directory variables
 TS_DIR="/data/adb/tailscale"
+TS_BIN_DIR="${TS_DIR}/bin"
 
 # Set path environment for busybox & other.
 export PATH="${TS_DIR}/bin:${TS_DIR}/scripts:/data/adb/magisk:/data/adb/ksu/bin:$PATH:/system/bin:${TS_MOD_DIR}/system/bin"
@@ -23,6 +24,23 @@ export TS_RUN_DIR="${TS_DIR}/run"
 # Set tailscaled log variables
 export TS_LOG_FILE="${TS_RUN_DIR}/tailscaled.log"
 export TS_RUN_LOG_FILE="${TS_RUN_DIR}/runs.log"
+
+# ---------------------------------------------------------------------------
+# CLI symlink
+# ---------------------------------------------------------------------------
+# The `tailscale` CLI is the same binary as `tailscaled`. Upstream's
+# createTailscaleSymlink() tries to maintain this itself, but it derives the
+# link from os.Executable(), and because we install atomically via rename the
+# running daemon can end up resolving to a replaced inode. That has been
+# observed leaving `tailscale -> tailscaled.prev`, which makes every
+# `tailscale` invocation silently run the OLD binary (wrong version, wrong
+# update feed). Repair it explicitly wherever we start or update the daemon.
+ensure_cli_symlink() {
+	[ -f "${TS_BIN_DIR}/tailscaled" ] || return 0
+	[ "$(readlink "${TS_BIN_DIR}/tailscale" 2>/dev/null || true)" = "tailscaled" ] && return 0
+	ln -sf "tailscaled" "${TS_BIN_DIR}/tailscale" 2>/dev/null || true
+	return 0
+}
 
 # Take the current time
 CURRENT_TIME=$(date +"%I:%M %P")

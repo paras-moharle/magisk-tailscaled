@@ -37,6 +37,12 @@ DIR=$(dirname "$(realpath "$0")")
 # shellcheck source=../settings.sh
 . "$DIR"/../settings.sh
 
+# settings.sh defines these, but a stale settings.sh from an older module
+# version would silently resolve paths against "/" — so pin them here.
+TS_DIR="${TS_DIR:-/data/adb/tailscale}"
+TS_BIN_DIR="${TS_BIN_DIR:-${TS_DIR}/bin}"
+TS_RUN_DIR="${TS_RUN_DIR:-${TS_DIR}/run}"
+
 BACKUP="${TS_BIN_DIR}/tailscaled.prev"
 STAMP_FILE="${TS_RUN_DIR}/last_update_check"
 STATE="${TS_RUN_DIR}/update.state"
@@ -157,6 +163,8 @@ cmd_run() {
 		return 1
 	fi
 	chmod 0755 "${TS_BIN_DIR}/tailscaled" 2>/dev/null || true
+	# Upstream may have left `tailscale` pointing at the replaced inode.
+	ensure_cli_symlink
 
 	_new="$(current_version)"
 	if [ -z "$_new" ]; then
@@ -194,6 +202,7 @@ cmd_rollback() {
 	cp -f "$BACKUP" "${TS_BIN_DIR}/tailscaled"
 	chmod 0755 "${TS_BIN_DIR}/tailscaled"
 	chown 0:0 "${TS_BIN_DIR}/tailscaled" 2>/dev/null || true
+	ensure_cli_symlink
 	tailscaled.service restart >/dev/null 2>&1 || true
 	sleep 6
 	if healthy; then

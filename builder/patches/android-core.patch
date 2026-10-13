@@ -396,7 +396,7 @@ index 0000000..ec0fd3a
 +	panic("unreachable")
 +}
 diff --git a/cmd/tailscaled/tailscaled.go b/cmd/tailscaled/tailscaled.go
-index 1b0ee60..e1317d6 100644
+index 1b0ee60..32228b2 100644
 --- a/cmd/tailscaled/tailscaled.go
 +++ b/cmd/tailscaled/tailscaled.go
 @@ -69,9 +69,48 @@
@@ -448,20 +448,22 @@ index 1b0ee60..e1317d6 100644
  	case "openbsd":
  		return "tun"
  	case "windows":
-@@ -199,6 +238,12 @@ func shouldRunCLI() bool {
+@@ -199,6 +238,14 @@ func shouldRunCLI() bool {
  
  func main() {
  	envknob.PanicIfAnyEnvCheckedInInit()
 +
-+	// On Android, ensure 'tailscale' symlink exists for combined binary compatibility
-+	if runtime.GOOS == "android" {
-+		createTailscaleSymlink()
-+	}
++	// Android: the "tailscale" symlink is owned by the Magisk/KernelSU module,
++	// not by this binary. createTailscaleSymlink() derives the link target from
++	// os.Executable(), so once the link points at a stale binary (e.g. the
++	// tailscaled.prev left by an update rollback) every later CLI invocation
++	// re-derives and rewrites the same broken link, and the CLI silently keeps
++	// running the old version while the daemon runs the new one.
 +
  	if shouldRunCLI() {
  		beCLI()
  		return
-@@ -231,7 +276,7 @@ func main() {
+@@ -231,7 +278,7 @@ func main() {
  		flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
  	}
  	flag.BoolVar(&printVersion, "version", false, "print version information and exit")

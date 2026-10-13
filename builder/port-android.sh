@@ -181,11 +181,31 @@ fi
 
 echo "==> Point the in-binary updater at $UPDATE_REPO"
 if [ -f clientupdate/clientupdate_android.go ]; then
-	perl -0pi -e 's{const androidGitHubRepoURL = "https://api\.github\.com/repos/[^"]+"}{const androidGitHubRepoURL = "https://api.github.com/repos/'"$UPDATE_REPO"'"}' \
-		clientupdate/clientupdate_android.go
-	grep -q "$UPDATE_REPO" clientupdate/clientupdate_android.go \
-		|| { echo "!! could not rewrite androidGitHubRepoURL" >&2; exit 1; }
-	echo "    ok"
+	# NB: the original constant ends in "/releases". updateAndroid() appends
+	# "/latest" or "/tags/v<ver>-android" to it, so dropping that suffix makes
+	# every request 404. Keep it.
+	python3 -c '
+import sys, re
+p = "clientupdate/clientupdate_android.go"
+s = open(p, encoding="utf-8").read()
+new_repo = sys.argv[1]
+s2, n = re.subn(
+    r"const androidGitHubRepoURL = \"https://api\.github\.com/repos/[^\"]+\"",
+    "const androidGitHubRepoURL = \"https://api.github.com/repos/" + new_repo + "/releases\"",
+    s, count=1)
+if n != 1:
+    print("  ! androidGitHubRepoURL not found", file=sys.stderr)
+    sys.exit(1)
+if "/releases\"" not in s2:
+    print("  ! rewritten URL lost its /releases suffix", file=sys.stderr)
+    sys.exit(1)
+open(p, "w", encoding="utf-8").write(s2)
+' "$UPDATE_REPO" || exit 1
+	grep -q "repos/${UPDATE_REPO}/releases\"" clientupdate/clientupdate_android.go || {
+		echo "!! could not rewrite androidGitHubRepoURL correctly" >&2
+		exit 1
+	}
+	echo "    ok -> https://api.github.com/repos/${UPDATE_REPO}/releases"
 else
 	echo "!! clientupdate/clientupdate_android.go missing — core patch incomplete" >&2
 	exit 1

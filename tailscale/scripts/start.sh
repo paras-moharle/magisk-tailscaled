@@ -11,6 +11,7 @@ case "$1" in
 esac
 start_service() {
   if [ ! -f "${TS_MOD_DIR}/disable" ]; then
+    ensure_cli_symlink
     tailscaled.service start >> "/dev/null" 2>&1
   fi
 }

@@ -40,3 +40,20 @@ The Android port is now split into scripted transforms (asserted, one per edit)
 plus `builder/patches/android-core.patch`, so an upstream refactor fails the
 build loudly rather than silently producing a broken binary.
 
+### Fixes found while testing on device
+
+- The port no longer lets the binary create its own `tailscale` symlink.
+  Upstream's `createTailscaleSymlink()` derives the link from
+  `os.Executable()`, so once the link pointed at the `tailscaled.prev` left by
+  a rollback, every later CLI call rewrote the same broken link — the CLI kept
+  reporting (and updating from) the old version while the daemon ran the new
+  one. The module now owns the link via `ensure_cli_symlink()`.
+- `TS_BIN_DIR` was never defined in `settings.sh`, so anything using it
+  resolved against `/`. It is defined now, and pinned defensively in the
+  updater.
+
+### Verified on device (OnePlus Nord 3, Android 15, KernelSU)
+
+1.90.6 -> 1.104.1, state preserved, health warning gone, rollback and
+auto-update both exercised end to end.
+
