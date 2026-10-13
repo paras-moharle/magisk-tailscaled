@@ -100,7 +100,14 @@ jobs:
           # Stamp the publication time so phones can hold a brand-new build back
           # for TS_UPDATE_SETTLE_HOURS. Stored as an epoch integer, not ISO-8601:
           # Android's toybox date cannot parse a formatted timestamp.
-          jq --argjson ts "$(date +%s)" '.publishedAtEpoch = $ts' \
+          #
+          # `repo` says which repository the release tag belongs to. Without it a
+          # consumer has to assume, and the assumption breaks the moment the
+          # daemon build and the module zip share a repo: /releases/latest is
+          # then whichever was published last, not whichever holds the daemon.
+          jq --argjson ts "$(date +%s)" \
+             --arg repo "${TS_UPDATE_REPO:-paras-moharle/tailscaled-reborn}" \
+             '.publishedAtEpoch = $ts | .repo = $repo' \
              dist/latest.json > tailscale-latest.json
           if git diff --quiet -- tailscale-latest.json; then
             echo "feed already current"

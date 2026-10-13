@@ -28,7 +28,6 @@ echo "========================================"
 FEED_URL="${TS_BIN_FEED:-https://raw.githubusercontent.com/${TS_BIN_REPO}/main/tailscale-latest.json}"
 
 echo "- Querying ${FEED_URL}"
-echo "    tag: ${FEED_TAG:-latest}"
 FEED_JSON="$(curl -fsSL "$FEED_URL" 2>/dev/null)" || FEED_JSON=""
 if [ -z "$FEED_JSON" ]; then
 	echo "!! Could not reach the pinned feed (${FEED_URL})" >&2
@@ -38,7 +37,14 @@ if [ -z "$FEED_JSON" ]; then
 		exit 1
 	}
 fi
+# The feed names the release the binaries actually live in, and optionally the
+# repo that release belongs to. Guessing is what broke this: the daemon build
+# and the module zip share a repo, so /releases/latest is whichever one was
+# published last, and a hardcoded repo points at a tag that may not exist.
 FEED_TAG="$(printf '%s' "$FEED_JSON" | jq -r '.tag // empty' 2>/dev/null)" || FEED_TAG=""
+FEED_REPO="$(printf '%s' "$FEED_JSON" | jq -r '.repo // empty' 2>/dev/null)" || FEED_REPO=""
+[ -n "$FEED_REPO" ] && TS_BIN_REPO="$FEED_REPO"
+echo "    tag: ${FEED_TAG:-<none>}  repo: ${TS_BIN_REPO}"
 
 AVAILABLE_ARCH=""
 for ARCH in arm64 arm; do
