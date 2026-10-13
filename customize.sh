@@ -9,27 +9,40 @@
 	set
 } || true
 
-# Github download helper
+# GitHub download helpers.
+#
+# These deliberately do NOT use api.github.com. The unauthenticated API allows
+# only 60 requests/hour per IP, and module installs are exactly when that limit
+# is most likely to be exhausted (everyone installing from the same CGNAT
+# range). /releases/latest/download/<asset> is a plain 302 redirect with no
+# rate limit.
+GH_LATEST="https://github.com"
+
+# fetch_latest_version <repo> — newest published Android build version.
+fetch_latest_version() {
+	_REPO="$1"
+	wget --no-check-certificate --timeout=20 -qO- \
+		"${GH_LATEST}/${_REPO}/releases/latest/download/latest.json" |
+		grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' |
+		cut -d'"' -f4 |
+		head -1
+}
+
+# gh_download <repo> <filename> — fetch a named asset from the latest release.
 gh_download() {
-	REPO=$1
-	MATCH=$2
-	DOWNLOAD_URL=$(
-		wget --no-check-certificate --timeout=10 -qO- "https://api.github.com/repos/${REPO}/releases/latest" |
-			grep "browser_download_url" |
-			grep "${MATCH}" |
-			sed 's/.*"browser_download_url": "\([^"]*\)".*/\1/' ||
-			true
-	)
-	if [ -z "$DOWNLOAD_URL" ]; then
-		ui_print "! Unable to get release from https://github.com/${REPO}/releases"
+	_REPO="$1"
+	_FILENAME="$2"
+	_URL="${GH_LATEST}/${_REPO}/releases/latest/download/${_FILENAME}"
+	ui_print "- Downloading $_FILENAME..."
+	if ! wget --no-check-certificate --timeout=100 -qO "$TMPDIR/$_FILENAME" "$_URL"; then
+		ui_print "! Download failed: $_URL"
 		return 1
 	fi
-	FILENAME=$(basename "$DOWNLOAD_URL")
-	ui_print "- Downloading $FILENAME..."
-	wget --no-check-certificate --timeout=100 -qO "$TMPDIR/$FILENAME" "$DOWNLOAD_URL" || {
-		ui_print "! Download timeout or failed"
+	if [ ! -s "$TMPDIR/$_FILENAME" ]; then
+		ui_print "! Downloaded file was empty: $_URL"
 		return 1
-	}
+	fi
+	FILENAME="$_FILENAME"
 }
 
 # shellcheck disable=SC2034
@@ -92,8 +105,17 @@ for f in "$TS_BIN_DIR"/*-"$ARCH"; do
 done
 
 [ -f "$TS_BIN_DIR/tailscaled" ] || {
-	gh_download "$TS_BIN_REPO" "tailscale_.*_${ARCH}\.tgz" || abort "error: Unable to download."
-	tar -xzf "$TMPDIR/$FILENAME" -C $TS_BIN_DIR || abort "error: Unable extract archive."
+	TS_LATEST_VER="$(fetch_latest_version "$TS_BIN_REPO")"
+	if [ -z "$TS_LATEST_VER" ]; then
+		ui_print "! Could not read the release feed for $TS_BIN_REPO"
+		ui_print "!   $GH_LATEST/$TS_BIN_REPO/releases/latest/download/latest.json"
+		ui_print "! Install the -full.zip instead if you are offline or rate limited."
+		abort "error: Unable to determine the latest tailscaled version."
+	fi
+	ui_print "- Latest published tailscaled: $TS_LATEST_VER"
+	gh_download "$TS_BIN_REPO" "tailscale_${TS_LATEST_VER}_${ARCH}.tgz" ||
+		abort "error: Unable to download tailscaled ${TS_LATEST_VER} (${ARCH})."
+	tar -xzf "$TMPDIR/$FILENAME" -C "$TS_BIN_DIR" || abort "error: Unable extract archive."
 	chmod 0755 "$TS_BIN_DIR/tailscaled"
 }
 
@@ -112,8 +134,19 @@ else
 fi
 
 [ -f "$TS_BIN_DIR/jq" ] || {
-	gh_download "theshoqanebi/jq-build-for-android" "jq-${F_ARCH}-linux-android" || abort "error: Unable to download."
+	# jq is required by tailscaled.api and tailscaled.update.
+	# Upstream only publishes a working aarch64 build; the armv7a asset it
+	# lists 404s, so say so plainly instead of failing with a cryptic error.
+	if [ "$ARCH" = "arm" ]; then
+		ui_print "! jq has no working 32-bit ARM Android build upstream."
+		ui_print "! This module therefore supports arm64 devices only."
+		ui_print "! (32-bit Android is below 0.5% of active devices.)"
+		abort "error: unsupported architecture arm."
+	fi
+	gh_download "theshoqanebi/jq-build-for-android" "jq-${F_ARCH}-linux-android" ||
+		abort "error: Unable to download jq."
 	mv -f "$TMPDIR/$FILENAME" "$TS_BIN_DIR/jq" || abort "error: Unable to move file."
+	chmod 0755 "$TS_BIN_DIR/jq"
 }
 
 ui_print "- Extracting files..."
@@ -171,6 +204,28 @@ else
 	ui_print "- Move General Scripts."
 	mv -f "$MODPATH/service.sh" "$SERVICE_DIR/tailscaled_service.sh"
 fi
+ui_print "- Installing the TailBridge app..."
+# The companion app is the only interface this fork ships: it provides Taildrop
+# (there is no other way to send a file, because this module deliberately leaves
+# the Android VPN slot free so the Play Store app cannot take it) plus every
+# setting known to take effect. A failed install must not abort the module --
+# the daemon is the part people cannot do without.
+APP_APK="$TS_DIR/app/TailBridge.apk"
+mkdir -p "${TS_DIR}/app"
+unzip -qqjo "$ZIPFILE" 'app/TailBridge.apk' -d "${TS_DIR}/app" 2>/dev/null || true
+if [ -f "$APP_APK" ]; then
+	set_perm "$APP_APK" 0 0 0644
+	if pm install -r -g "$APP_APK" >/dev/null 2>&1; then
+		ui_print "  TailBridge installed."
+	else
+		ui_print "  Could not install TailBridge automatically."
+		ui_print "  Install it later with:"
+		ui_print "    pm install -r $APP_APK"
+	fi
+else
+	ui_print "  APK missing from this package."
+fi
+
 ui_print "- Starting service in background."
 ${TS_SCRIPTS_DIR}/start.sh postinstall 2>&1 &
 if [ ! -f "/system/bin/tailscale" ] || ! cmp --silent "/system/bin/tailscale" "$MODPATH/system/bin/tailscale"; then

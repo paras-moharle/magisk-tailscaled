@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<string name="app_name">TailBridge</string>
+	<string name="loading">Starting…</string>
+	<string name="refresh">Refresh</string>
+	<string name="copy">Copy</string>
+	<string name="checking">Checking…</string>
+	<string name="working">Working…</string>
+	<string name="done">Done</string>
+	<string name="failed">Failed: %1$s</string>
+	<string name="copied">%1$s copied</string>
+
+	<string name="nav_send">Send</string>
+	<string name="nav_devices">Devices</string>
+	<string name="nav_settings">Settings</string>
+	<string name="nav_system">System</string>
+
+	<string name="connected">Connected</string>
+	<string name="offline">Not connected</string>
+	<string name="stopped">Stopped</string>
+
+	<!-- send -->
+	<string name="send_files">Send files</string>
+	<string name="send_to">Send to %1$s</string>
+	<string name="send_to_n">Send to %1$d devices</string>
+	<string name="send">Send</string>
+	<string name="choose_devices">Send to</string>
+	<string name="pick_a_device">Pick a device first</string>
+	<string name="no_peers">No devices online. Sign in from the System tab first.</string>
+	<string name="no_peers_short">No devices online</string>
+	<string name="shared_n">%1$d item(s) ready — tick the devices above, then send.</string>
+	<string name="sending">Sending…</string>
+	<string name="sent_ok">Sent %1$d file(s) to %2$d device(s)</string>
+	<string name="sent_partial">%1$d delivered, %2$d failed</string>
+	<string name="send_failed">Send failed</string>
+	<string name="no_picker">No file picker available</string>
+
+	<!-- home -->
+	<string name="this_device">This device</string>
+	<string name="device_name">Device name</string>
+	<string name="ips">Tailscale addresses</string>
+	<string name="relay">Relay</string>
+	<string name="ipv4">IPv4 address</string>
+	<string name="ipv6">IPv6 address</string>
+	<string name="none">None</string>
+	<string name="direct">Direct</string>
+	<string name="console">Open admin console</string>
+	<string name="no_browser">No browser available</string>
+
+	<!-- devices -->
+	<string name="online_peers">Online devices</string>
+	<string name="exit_node_suffix">Exit node</string>
+
+	<!-- settings -->
+	<string name="connectivity">Connectivity</string>
+	<string name="backend">Backend</string>
+	<string name="tailnet">Tailnet</string>
+	<string name="services">Services</string>
+	<string name="t_accept_dns">Accept DNS</string>
+	<string name="d_accept_dns">Use tailnet DNS names</string>
+	<string name="t_accept_routes">Accept routes</string>
+	<string name="d_accept_routes">Follow subnet routes from peers</string>
+	<string name="t_shields_up">Shields up</string>
+	<string name="d_shields_up">Block incoming connections</string>
+	<string name="t_ssh">Tailscale SSH</string>
+	<string name="d_ssh">Let tailnet members SSH in</string>
+	<string name="t_webclient">Web client</string>
+	<string name="d_webclient">Serve the admin UI on this device</string>
+	<string name="t_adv_exit">Advertise as exit node</string>
+	<string name="d_adv_exit">Share this device\'s internet</string>
+	<string name="t_snat">SNAT subnet routes</string>
+	<string name="d_snat">Masquerade subnet traffic to this device</string>
+	<string name="hostname">Device name</string>
+	<string name="hostname_hint">Device name</string>
+	<string name="apply">Apply</string>
+	<string name="daemon_stopped_note">Start the daemon from the System tab to change these.</string>
+	<string name="footnote">Tailscale runs in userspace mode inside the Magisk/KernelSU module, so it never takes the Android VPN slot and another VPN app can run alongside it.</string>
+
+	<!-- system -->
+	<string name="daemon">Daemon</string>
+	<string name="running">Running</string>
+	<string name="start">Start</string>
+	<string name="stop">Stop</string>
+	<string name="restart">Restart daemon</string>
+	<string name="service">Run tailscaled</string>
+	<string name="service_sub">Start or stop the Tailscale daemon</string>
+	<string name="sign_in">Sign in</string>
+	<string name="sign_in_body">Open the link to authorise this device, then come back.</string>
+	<string name="already_signed_in">Already signed in</string>
+	<string name="no_login_url">Could not get a login link</string>
+
+	<string name="software">Software</string>
+	<string name="tailscaled_version">tailscaled</string>
+	<string name="module_version">Module</string>
+	<string name="check_updates">Check for updates</string>
+	<string name="install_update">Update to %1$s</string>
+	<string name="update_available">%1$s is available</string>
+	<string name="rollback">Roll back to previous version</string>
+	<string name="rollback_confirm">Restore the previous tailscaled binary?</string>
+	<string name="logs">Daemon log</string>
+	<string name="no_logs">(log is empty)</string>
+
+	<string name="about">About</string>
+	<string name="credits_body">Tailscale daemon built from upstream Tailscale with the Android port (kxxt) by paras-moharle.\n\nModule: Magisk-Tailscaled, originally by anasfanani.\nDaemon interface: Tailscale, Inc.\n\nTailscale is a trademark of Tailscale Inc. This app is not affiliated with them.</string>
+	<string name="github_link">Project on GitHub</string>
+
+	<!-- root -->
+	<string name="need_root_short">Root needed</string>
+	<string name="need_root">TailBridge talks to the tailscaled daemon in the Tailscale module, which lives in a root-only directory, so TailBridge needs root permission.</string>
+	<string name="grant_root">Grant root permission</string>
+	<string name="root_setup">Grant root permission</string>
+	<string name="root_manager">Open app settings</string>
+	<string name="root_manager_sub">Turn on TailBridge in your root manager, under Superuser</string>
+		<string name="app_settings">App settings</string>
+</resources>

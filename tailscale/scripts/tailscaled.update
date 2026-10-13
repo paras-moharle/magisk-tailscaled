@@ -59,6 +59,42 @@ snapshot() {
 current_version() { tailscaled --version 2>/dev/null | head -1 | tr -d ' \r'; }
 backup_version() { "$BACKUP" --version 2>/dev/null | head -1 | tr -d ' \r'; }
 
+# version_is_newer <a> <b>
+version_is_newer() {
+	[ -n "$1" ] && [ -n "$2" ] || return 1
+	[ "$1" != "$2" ] || return 1
+	_i=1
+	while [ "$_i" -le 3 ]; do
+		_a=$(echo "$1" | cut -d. -f"$_i" | tr -dc '0-9')
+		_b=$(echo "$2" | cut -d. -f"$_i" | tr -dc '0-9')
+		_a=${_a:-0}
+		_b=${_b:-0}
+		[ "$_a" -gt "$_b" ] 2>/dev/null && return 0
+		[ "$_b" -gt "$_a" ] 2>/dev/null && return 1
+		_i=$((_i + 1))
+	done
+	return 1
+}
+
+# up_to_date — true when nothing newer is published.
+#
+# Uses the release-asset feed (settings.sh: TS_LATEST_URL) rather than
+# `tailscale update --dry-run`, because the latter hits api.github.com, which
+# is limited to 60 requests/hour per IP. Phones are usually behind CGNAT where
+# that limit is shared with many other users, so it is routinely exhausted.
+up_to_date() {
+	_lv="$(latest_version 2>/dev/null || true)"
+	if [ -n "$_lv" ]; then
+		version_is_newer "$(current_version)" "$_lv" && return 1
+		return 0
+	fi
+	# Feed unreachable — fall back to the binary's own check.
+	case "$(timeout 60 tailscale update --dry-run 2>&1)" in
+	*"no update needed"* | *"already running"*) return 0 ;;
+	esac
+	return 1
+}
+
 touch_stamp() { date +%s >"$STAMP_FILE" 2>/dev/null || true; }
 
 # due — true when the interval has elapsed (or we have never checked).
@@ -100,7 +136,14 @@ cmd_status() {
 		printf '  %sBackup      %snone%s\n' "$blue" "$normal" "$normal"
 	fi
 
-	if _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
+	_lv="$(latest_version 2>/dev/null || true)"
+	if [ -n "$_lv" ]; then
+		if version_is_newer "$_cur" "$_lv"; then
+			printf '  %sLatest      %s%s available%s\n' "$blue" "$yellow" "$_lv" "$normal"
+		else
+			printf '  %sLatest      %sup to date%s\n' "$blue" "$green" "$normal"
+		fi
+	elif _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
 		case "$_dry" in
 		*"no update needed"* | *"already running"*) printf '  %sLatest      %sup to date%s\n' "$blue" "$green" "$normal" ;;
 		*) printf '  %sLatest      %supdate available%s\n' "$blue" "$yellow" "$normal" ;;
@@ -113,13 +156,34 @@ cmd_status() {
 # ------------------------------------------------------------------- check --
 cmd_check() {
 	touch_stamp
+	if _lv="$(latest_version 2>/dev/null || true)"; then :; fi
+	if [ -n "$_lv" ]; then
+		case "$(version_is_newer "$(current_version)" "$_lv" && echo newer)" in
+		newer)
+			write_state "update-available"
+			printf '%s\n' "${yellow}tailscaled ${_lv} is available (installed: $(current_version))${normal}"
+			;;
+		*)
+			write_state "ok-$(current_version)"
+			printf '%s\n' "${green}tailscaled is up to date ($(current_version))${normal}"
+			;;
+		esac
+		return 0
+	fi
+
+	# Feed unreachable; fall back to the binary's own check (rate limited).
 	if _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
 		case "$_dry" in
 		*"no update needed"* | *"already running"*)
 			write_state "ok-$(current_version)"
 			printf '%s\n' "${green}tailscaled is up to date${normal}"
 			;;
-		*) write_state "update-available"
+		*403* | *"rate limit"*)
+			write_state "ratelimited"
+			printf '%s\n' "${yellow}GitHub rate limit reached; will retry later.${normal}"
+			;;
+		*)
+			write_state "update-available"
 			printf '%s\n' "${yellow}An update is available: ${_dry}${normal}"
 			;;
 		esac
@@ -134,17 +198,10 @@ cmd_run() {
 	touch_stamp
 	_cur="$(current_version)"
 
-	if ! _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
-		log Warning "Could not reach the release feed; will retry later."
-		write_state "feed-unreachable"
-		return 0
-	fi
-	case "$_dry" in
-	*"no update needed"* | *"already running"*)
+	if up_to_date; then
 		write_state "ok-${_cur}"
 		return 0
-		;;
-	esac
+	fi
 
 	log Info "Updating tailscaled (${_cur})..."
 	snapshot

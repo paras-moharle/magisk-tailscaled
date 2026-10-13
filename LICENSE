@@ -1,6 +1,11 @@
 BSD 3-Clause License
 
 Copyright (c) 2023 ANASFANANI & AUTHORS.
+Copyright (c) 2026 paras-moharle.
+
+This project is a fork of anasfanani/Magisk-Tailscaled. The original copyright
+and licence are retained above and below; this fork adds substantial changes,
+including the TailBridge companion app, which are released under the same terms.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:

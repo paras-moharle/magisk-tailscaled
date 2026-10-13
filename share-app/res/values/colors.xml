@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<!-- Neutral near-black. Nothing here is decorative; the surfaces just
+	     separate rows from the page. -->
+	<color name="bg">#FF0C0F13</color>
+	<color name="surface">#FF171B21</color>
+	<color name="surfaceHi">#FF1F242C</color>
+	<color name="divider">#FF262C35</color>
+
+	<color name="text">#FFECEFF3</color>
+	<color name="text2">#FF98A2B0</color>
+	<color name="hint">#FF6B7583</color>
+
+	<!-- The one accent in the app. It marks the single primary action and
+	     nothing else, so "Send" is always the thing your eye lands on. -->
+	<color name="accent">#FF3D8BFF</color>
+	<color name="onAccent">#FF05121F</color>
+
+	<!-- Status only. -->
+	<color name="ok">#FF3DDC84</color>
+	<color name="warn">#FFFFB020</color>
+	<color name="err">#FFFF5D5D</color>
+</resources>

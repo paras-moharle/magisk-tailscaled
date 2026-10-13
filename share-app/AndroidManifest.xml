@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+	package="com.paras.tailbridge"
+	android:versionCode="1"
+	android:versionName="1.0.0">
+
+	<application
+		android:label="@string/app_name"
+		android:icon="@drawable/ic_launcher"
+		android:theme="@style/Theme.Share"
+		android:allowBackup="false"
+		android:supportsRtl="true">
+
+		<!--
+		  One activity for everything.
+
+		  It is both the launcher icon and the share target, so "Share to
+		  Tailscale" from Gallery, Files or a browser lands on the same Send
+		  screen the app already uses — there is no separate share UI and no
+		  intermediate dialog.
+
+		  This is the whole point of the app: the Play Store Tailscale app
+		  registers this share entry, but it owns the VpnService slot. This
+		  module deliberately does NOT use VpnService (tailscaled runs in
+		  userspace mode so another VPN app can run alongside), so without a
+		  share-target app there is no way to send a file at all.
+		-->
+		<activity
+			android:name=".MainActivity"
+			android:exported="true"
+			android:launchMode="singleTask"
+			android:configChanges="uiMode|orientation|screenSize|keyboardHidden"
+			android:label="@string/app_name">
+
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+
+			<!-- share target: one file -->
+			<intent-filter>
+				<action android:name="android.intent.action.SEND" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+
+			<!-- share target: several files -->
+			<intent-filter>
+				<action android:name="android.intent.action.SEND_MULTIPLE" />
+				<category android:name="android.intent.category.DEFAULT" />
+				<data android:mimeType="*/*" />
+			</intent-filter>
+		</activity>
+	</application>
+</manifest>

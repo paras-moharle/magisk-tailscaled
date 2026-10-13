@@ -11,9 +11,24 @@ export TS_MOD_PROP="${TS_MOD_DIR}/module.prop"
 TS_DIR="/data/adb/tailscale"
 TS_BIN_DIR="${TS_DIR}/bin"
 
+# Where "what version is current?" is answered from. This is a release asset
+# behind GitHub's /releases/latest/ redirect, not the GitHub API:
+# unauthenticated api.github.com allows only 60 requests/hour per IP, and
+# phones sit behind CGNAT where a whole carrier can share one address, so an
+# API-based check gets 403'd for hours at a time.
+export TS_LATEST_URL="${TS_LATEST_URL:-https://github.com/paras-moharle/tailscale-android-cli/releases/latest/download/latest.json}"
+
 # Set path environment for busybox & other.
 export PATH="${TS_DIR}/bin:${TS_DIR}/scripts:/data/adb/magisk:/data/adb/ksu/bin:$PATH:/system/bin:${TS_MOD_DIR}/system/bin"
 export HOME="/data/adb/tailscale/" # Because tailscaled will write log to $HOME
+
+# tailscaled inherits TMPDIR from whoever started it. Start it once from an app
+# and it keeps pointing at that app's cache directory forever — and when that
+# app is later uninstalled the path vanishes, incoming Taildrop files fail to
+# stage, and every send reports success while nothing is ever written.
+# Pin it inside the module so the daemon is independent of its launcher.
+export TMPDIR="${TS_DIR}/tmp"
+mkdir -p "$TMPDIR"
 
 # Set tailscaled & tailscale configuration
 export TS_DAEMON_CMD="tailscaled -no-logs-no-support"
@@ -40,6 +55,32 @@ ensure_cli_symlink() {
 	[ "$(readlink "${TS_BIN_DIR}/tailscale" 2>/dev/null || true)" = "tailscaled" ] && return 0
 	ln -sf "tailscaled" "${TS_BIN_DIR}/tailscale" 2>/dev/null || true
 	return 0
+}
+
+# ts_fetch <url> — print a URL to stdout.
+#
+# A stock Android kernel has no standalone wget/curl; busybox provides one.
+# IMPORTANT: this busybox build does NOT validate TLS certificates. Only use
+# this for unauthenticated, non-sensitive reads such as the version feed.
+# Never use it to download binaries — those go through the Go updater inside
+# tailscaled, which does verify certificates.
+ts_fetch() {
+	if command -v curl >/dev/null 2>&1; then
+		timeout 30 curl -fsSL "$1" 2>/dev/null
+	elif command -v wget >/dev/null 2>&1; then
+		timeout 30 wget -qO- "$1" 2>/dev/null
+	elif command -v busybox >/dev/null 2>&1; then
+		timeout 30 busybox wget -qO- "$1" 2>/dev/null
+	else
+		return 1
+	fi
+}
+
+# latest_version — newest published Android build, or empty if unreachable.
+latest_version() {
+	_json="$(ts_fetch "$TS_LATEST_URL")" || return 1
+	[ -n "$_json" ] || return 1
+	printf '%s' "$_json" | "${TS_BIN_DIR}/jq" -r '.version // empty' 2>/dev/null
 }
 
 # Take the current time

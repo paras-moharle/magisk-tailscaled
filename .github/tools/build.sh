@@ -21,29 +21,54 @@ mkdir -p "$BIN_DIR" "$DIST_DIR"
 echo "Packaging Magisk-Tailscaled ${VERSION}"
 echo "========================================"
 
-# Fetch the release once; a missing asset for one arch must not abort the build.
-echo "- Querying ${TS_BIN_REPO}"
-RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${TS_BIN_REPO}/releases/latest")" || {
-	echo "!! Could not reach ${TS_BIN_REPO}" >&2
-	exit 1
-}
+# Discover binaries through the release-asset feed, not the GitHub API.
+# Unauthenticated api.github.com allows 60 requests/hour per IP, and CI plus a
+# phone behind CGNAT can easily exhaust that; /releases/latest/download/ is a
+# plain redirect with no limit.
+FEED_URL="${TS_BIN_FEED:-https://github.com/${TS_BIN_REPO}/releases/latest/download/latest.json}"
+
+echo "- Querying ${FEED_URL}"
+FEED_JSON="$(curl -fsSL "$FEED_URL" 2>/dev/null)" || FEED_JSON=""
+if [ -z "$FEED_JSON" ]; then
+	echo "!! Could not reach the release feed (${FEED_URL})" >&2
+	echo "!! The GitHub API is an acceptable fallback for CI." >&2
+	FEED_JSON="$(curl -fsSL "https://api.github.com/repos/${TS_BIN_REPO}/releases/latest" 2>/dev/null)" || {
+		echo "!! Release feed and API both unreachable; cannot embed binaries." >&2
+		exit 1
+	}
+fi
 
 AVAILABLE_ARCH=""
 for ARCH in arm64 arm; do
-	URL="$(jq -r --arg re "^tailscale_[0-9.]+_${ARCH}\\.tgz$" \
-		'.assets[]? | select(.name | test($re)) | .browser_download_url' <<<"$RELEASE_JSON" | head -1)"
+	# latest.json lists asset names; the GitHub API lists objects with URLs.
+	# Accept either, and never let a jq hiccup abort the build under pipefail.
+	NAME="$(jq -r --arg a "$ARCH" \
+		'if (.assets|type)=="array" then
+		   (.assets[] | select(.name | endswith("_" + $a + ".tgz")) | .name)
+		 elif (.assets|type)=="object" then
+		   (.assets | to_entries[] | select(.value | endswith("_" + $a + ".tgz")) | .value)
+		 else empty end' <<<"$FEED_JSON" 2>/dev/null | head -1)" || NAME=""
 
-	if [ -z "$URL" ]; then
+	if [ -z "$NAME" ]; then
 		echo "  ! no ${ARCH} binary published; skipping"
 		continue
 	fi
 
-	echo "- Downloading tailscaled for ${ARCH}..."
-	curl -fsSL "$URL" | tar -xz -C "$BIN_DIR" --transform="s|^tailscale|tailscale|" \
-		|| {
-		echo "!! failed to fetch ${ARCH}" >&2
+	URL="$(jq -r --arg n "$NAME" \
+		'if (.assets|type)=="array" then
+		   (.assets[] | select(.name == $n) | .browser_download_url)
+		 else empty end' <<<"$FEED_JSON" 2>/dev/null | head -1)" || URL=""
+
+	if [ -z "$URL" ]; then
+		# release-asset feed: construct the stable download URL
+		URL="https://github.com/${TS_BIN_REPO}/releases/latest/download/${NAME}"
+	fi
+
+	echo "- Downloading ${NAME}..."
+	if ! curl -fsSL "$URL" | tar -xz -C "$BIN_DIR"; then
+		echo "!! failed to fetch ${NAME}" >&2
 		exit 1
-	}
+	fi
 	# The tgz holds a single file named `tailscaled`.
 	if [ ! -f "$BIN_DIR/tailscaled" ]; then
 		echo "!! archive for ${ARCH} did not contain tailscaled" >&2

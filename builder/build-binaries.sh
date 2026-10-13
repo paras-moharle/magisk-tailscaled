@@ -118,10 +118,32 @@ fi
 
 cd "$REPO_ROOT/dist"
 sha256sum tailscale_${SHORT}_*.tgz > SHA256SUMS
+
+# Machine-readable "what is current" pointer.
+#
+# Deliberately NOT the GitHub API: unauthenticated api.github.com is limited to
+# 60 requests/hour PER IP, and phones sit behind CGNAT where a whole mobile
+# carrier can share one address. Checking for updates through the API means a
+# phone can get 403'd for hours. Attach this to the release and read it via
+# https://github.com/<owner>/<repo>/releases/latest/download/latest.json,
+# which is a plain redirect with no rate limit.
+cat > latest.json <<JSON
+{
+  "version": "${SHORT}",
+  "tag": "v${SHORT}-android",
+  "longVersion": "${VERSION_LONG}",
+  "gitCommit": "${VERSION_GIT_HASH}",
+  "assets": {
+    "arm64": "tailscale_${SHORT}_arm64.tgz"
+  }
+}
+JSON
+
 echo
 echo "==> Done"
 ls -1 tailscale_${SHORT}_*.tgz
-echo "SHA256SUMS written."
+echo "SHA256SUMS and latest.json written."
 echo
 echo "Release tag to publish:  v${SHORT}-android"
 echo "Assets must be named:   tailscale_${SHORT}_arm.tgz, tailscale_${SHORT}_arm64.tgz"
+echo "                        SHA256SUMS, latest.json"

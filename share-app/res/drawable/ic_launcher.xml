@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A rounded frame with an arrow lifting out of it: the app exists to put files
+  on another machine. Same geometry as the Send icon inside the app, so the
+  launcher and the app agree.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+	android:width="108dp"
+	android:height="108dp"
+	android:viewportWidth="108"
+	android:viewportHeight="108">
+
+	<path
+		android:fillColor="#FF10151D"
+		android:pathData="M0,0 L108,0 L108,108 L0,108 Z" />
+
+	<path
+		android:strokeColor="#FFECEFF3"
+		android:strokeWidth="4.5"
+		android:strokeLineJoin="round"
+		android:fillColor="#00000000"
+		android:pathData="M29,27 L79,27 Q85,27 85,33 L85,75 Q85,81 79,81 L29,81 Q23,81 23,75 L23,33 Q23,27 29,27 Z" />
+
+	<path
+		android:strokeColor="#FFECEFF3"
+		android:strokeWidth="5.5"
+		android:strokeLineCap="round"
+		android:strokeLineJoin="round"
+		android:fillColor="#00000000"
+		android:pathData="M54,70 L54,40" />
+
+	<path
+		android:strokeColor="#FFECEFF3"
+		android:strokeWidth="5.5"
+		android:strokeLineCap="round"
+		android:strokeLineJoin="round"
+		android:fillColor="#00000000"
+		android:pathData="M43,51 L54,40 L65,51" />
+</vector>

@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+	android:layout_width="match_parent"
+	android:layout_height="match_parent"
+	android:orientation="vertical"
+	android:background="@drawable/bg_app">
+
+	<!-- ── header: one title line, nothing more ───────────────── -->
+	<LinearLayout
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:orientation="horizontal"
+		android:gravity="center_vertical"
+		android:paddingStart="22dp"
+		android:paddingEnd="14dp"
+		android:paddingTop="22dp"
+		android:paddingBottom="14dp">
+
+		<View
+			android:id="@+id/dot"
+			android:layout_width="9dp"
+			android:layout_height="9dp"
+			android:layout_marginEnd="11dp"
+			android:background="@drawable/dot" />
+
+		<LinearLayout
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:layout_weight="1"
+			android:orientation="vertical">
+
+			<TextView
+				android:id="@+id/status"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:singleLine="true"
+				android:ellipsize="end"
+				android:text="@string/loading"
+				android:textColor="@color/text"
+				android:textSize="19sp"
+				android:textStyle="bold" />
+
+			<TextView
+				android:id="@+id/version"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:layout_marginTop="2dp"
+				android:singleLine="true"
+				android:ellipsize="end"
+				android:textColor="@color/text2"
+				android:textSize="12sp" />
+		</LinearLayout>
+
+		<ImageButton
+			android:id="@+id/refresh"
+			android:layout_width="42dp"
+			android:layout_height="42dp"
+			android:background="?android:attr/selectableItemBackgroundBorderless"
+			android:contentDescription="@string/refresh"
+			android:padding="11dp"
+			android:src="@drawable/ic_refresh"
+			android:tint="@color/text2" />
+	</LinearLayout>
+
+	<!-- ── content ─────────────────────────────────────────────── -->
+	<FrameLayout
+		android:id="@+id/panels"
+		android:layout_width="match_parent"
+		android:layout_height="0dp"
+		android:layout_weight="1">
+
+		<ScrollView
+			android:id="@+id/scrollSend"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:clipToPadding="false"
+			android:scrollbars="none">
+
+			<LinearLayout
+				android:id="@+id/pSend"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="vertical"
+				android:paddingStart="16dp"
+				android:paddingEnd="16dp"
+				android:paddingBottom="28dp" />
+		</ScrollView>
+
+
+		<ScrollView
+			android:id="@+id/scrollSettings"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:clipToPadding="false"
+			android:scrollbars="none"
+			android:visibility="gone">
+
+			<LinearLayout
+				android:id="@+id/pSettings"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="vertical"
+				android:paddingStart="16dp"
+				android:paddingEnd="16dp"
+				android:paddingBottom="28dp" />
+		</ScrollView>
+
+		<ScrollView
+			android:id="@+id/scrollSystem"
+			android:layout_width="match_parent"
+			android:layout_height="match_parent"
+			android:clipToPadding="false"
+			android:scrollbars="none"
+			android:visibility="gone">
+
+			<LinearLayout
+				android:id="@+id/pSystem"
+				android:layout_width="match_parent"
+				android:layout_height="wrap_content"
+				android:orientation="vertical"
+				android:paddingStart="16dp"
+				android:paddingEnd="16dp"
+				android:paddingBottom="28dp" />
+		</ScrollView>
+	</FrameLayout>
+
+	<!-- ── nav: flat bar, hairline above, icon over a small word ── -->
+	<View
+		android:layout_width="match_parent"
+		android:layout_height="1dp"
+		android:background="@drawable/divider" />
+
+	<LinearLayout
+		android:layout_width="match_parent"
+		android:layout_height="wrap_content"
+		android:orientation="horizontal"
+		android:background="@color/bg"
+		android:paddingTop="9dp"
+		android:paddingBottom="12dp">
+
+		<LinearLayout
+			android:id="@+id/navSend"
+			style="@style/Nav">
+
+			<ImageView
+				android:id="@+id/navIcon"
+				style="@style/NavIcon"
+				android:src="@drawable/ic_send" />
+
+			<TextView
+				android:id="@+id/navLabel"
+				style="@style/NavLabel"
+				android:text="@string/nav_send" />
+		</LinearLayout>
+
+
+		<LinearLayout
+			android:id="@+id/navSettings"
+			style="@style/Nav">
+
+			<ImageView
+				android:id="@+id/navIcon"
+				style="@style/NavIcon"
+				android:src="@drawable/ic_settings" />
+
+			<TextView
+				android:id="@+id/navLabel"
+				style="@style/NavLabel"
+				android:text="@string/nav_settings" />
+		</LinearLayout>
+
+		<LinearLayout
+			android:id="@+id/navSystem"
+			style="@style/Nav">
+
+			<ImageView
+				android:id="@+id/navIcon"
+				style="@style/NavIcon"
+				android:src="@drawable/ic_system" />
+
+			<TextView
+				android:id="@+id/navLabel"
+				style="@style/NavLabel"
+				android:text="@string/nav_system" />
+		</LinearLayout>
+	</LinearLayout>
+</LinearLayout>

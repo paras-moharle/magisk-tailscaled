@@ -1,0 +1,499 @@
+#!/system/bin/sh
+# tailscaled.api — JSON backend for the companion app.
+#
+# The companion app has no filesystem or network access of its own; everything it shows
+# or changes goes through this script. Keeping the command construction here
+# rather than in JavaScript means:
+#   - every privileged call is auditable in one place
+#   - inputs are validated before they reach a root shell
+#   - it can be tested with plain `adb shell su -c` without the WebView
+#
+# Usage: tailscaled.api <command> [args]
+# Output: a single JSON object on stdout. Never exits non-zero for an expected
+# error — errors are reported as {"ok":false,"error":"..."}.
+set -e
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+
+TS_DIR="${TS_DIR:-/data/adb/tailscale}"
+TS_BIN_DIR="${TS_BIN_DIR:-${TS_DIR}/bin}"
+TS_RUN_DIR="${TS_RUN_DIR:-${TS_DIR}/run}"
+TS_LOG_FILE="${TS_LOG_FILE:-${TS_RUN_DIR}/tailscaled.log}"
+TS_SCRIPTS_DIR="${TS_SCRIPTS_DIR:-${TS_DIR}/scripts}"
+
+JQ="${TS_BIN_DIR}/jq"
+TS_CLI="${TS_BIN_DIR}/tailscale"
+
+# --- helpers ----------------------------------------------------------------
+
+err() {
+	printf '{"ok":false,"error":%s}\n' "$("$JQ" -Rn --arg e "$1" '$e')"
+	exit 0
+}
+
+need_cli() {
+	[ -x "$TS_CLI" ] || err "tailscale CLI not found at $TS_CLI"
+	ensure_cli_symlink
+}
+
+# Validators RETURN a status; they must not call err() themselves. These are
+# used from command substitution, where an `exit` would only leave the
+# subshell — validation would then silently fail open and the unchecked value
+# would reach the tailscale command.
+
+# Allow values we are willing to hand to a root shell: [A-Za-z0-9._:@/+-]
+valid_token() {
+	printf '%s' "$1" | grep -qE '^[A-Za-z0-9._:@/+-]+$'
+}
+
+valid_hostname() {
+	printf '%s' "$1" | grep -qE '^[A-Za-z0-9][A-Za-z0-9-]{0,62}$'
+}
+
+valid_bool() {
+	case "$1" in
+	true | false) return 0 ;;
+	esac
+	return 1
+}
+
+ts_json() { timeout 15 "$TS_CLI" "$@" 2>/dev/null; }
+
+current_version() { "$TS_BIN_DIR/tailscaled" --version 2>/dev/null | head -1 | tr -d ' \r'; }
+
+# version_is_newer <a> <b> — dotted numeric compare, ignoring any -pre/-dev suffix
+version_is_newer() {
+	[ -n "$1" ] && [ -n "$2" ] || return 1
+	[ "$1" != "$2" ] || return 1
+	_i=1
+	while [ "$_i" -le 3 ]; do
+		_a=$(echo "$1" | cut -d. -f"$_i" | tr -dc '0-9')
+		_b=$(echo "$2" | cut -d. -f"$_i" | tr -dc '0-9')
+		_a=${_a:-0}
+		_b=${_b:-0}
+		[ "$_a" -gt "$_b" ] 2>/dev/null && return 0
+		[ "$_b" -gt "$_a" ] 2>/dev/null && return 1
+		_i=$((_i + 1))
+	done
+	return 1
+}
+
+module_version() {
+	grep '^version=' "${TS_MOD_DIR}/module.prop" 2>/dev/null | cut -d= -f2 || echo unknown
+}
+
+# --- status -----------------------------------------------------------------
+
+api_status() {
+	need_cli
+	_ver="$("$TS_BIN_DIR/tailscaled" --version 2>/dev/null | head -1 | tr -d ' \r')"
+	[ -n "$_ver" ] || _ver=unknown
+
+	_daemon=stopped
+	busybox pgrep -f 'tailscaled -no-logs' >/dev/null 2>&1 && _daemon=running
+
+	# A stopped daemon is a normal state, not an error: the app shows a toggle
+	# for it, so report "Stopped" instead of failing the whole request.
+	if [ "$_daemon" = running ]; then
+		if ! _st="$(ts_json status --json)"; then
+			_st='{}'
+		fi
+	else
+		_st='{}'
+	fi
+	[ -n "$_st" ] || _st='{}'
+
+	if ! _pfx="$(timeout 10 "$TS_CLI" debug prefs 2>/dev/null)"; then
+		_pfx='{}'
+	fi
+	[ -n "$_pfx" ] || _pfx='{}'
+
+	# Ask the release feed, not the GitHub API — see TS_LATEST_URL in
+	# settings.sh for why. Falls back to the binary's own check only if the
+	# feed is unreachable, since that path is rate limited.
+	# Deliberately NO network call here. This endpoint is on the UI's hot path
+	# and `tailscale update --dry-run` reaches out to GitHub, which turns a
+	# ~200ms local read into a multi-second (or hanging) one. Use
+	# `tailscaled.api update-check` for that, off the critical path.
+	_latest=""
+	_feed_state="unchecked"
+
+	"$JQ" -n \
+		--argjson st "$_st" \
+		--argjson pf "$_pfx" \
+		--arg ver "$_ver" \
+		--arg mod "$(module_version)" \
+		--arg daemon "$_daemon" \
+		--arg latest "$_latest" \
+		--arg feed "$_feed_state" \
+		'
+	  def arr(x): x // [];
+	  ($st) as $s | ($pf) as $p |
+	  {
+	    ok: true,
+	    daemon: $daemon,
+	    backend: (if $daemon == "running" then ($s.BackendState // "NoState") else "Stopped" end),
+	    version: $ver,
+	    module: $mod,
+	    latest: $latest,
+	    feed: $feed,
+	    tailnet: {
+	      name: ($s.CurrentTailnet.Name // ""),
+	      magicDNS: ($s.CurrentTailnet.MagicDNSEnabled // false),
+	      magicDNSSuffix: ($s.MagicDNSSuffix // ""),
+	      domain: ($s.CurrentTailnet.Domain // "")
+	    },
+	    self: {
+	      # HostName is the local pref and lags behind a rename made in the admin
+	      # console; DNSName reflects the control plane immediately, so prefer its
+	      # first label.
+	      host: (if ((($s.Self.DNSName // "") | sub("\\.$"; "") | split(".")[0]) | length) > 0
+	              then (($s.Self.DNSName // "") | sub("\\.$"; "") | split(".")[0])
+	              else ($s.Self.HostName // "")
+	              end),
+	      os: ($s.Self.OS // ""),
+	      online: ($s.Self.Online // false),
+	      relay: ($s.Self.Relay // ""),
+	      tailscaleIPs: arr($s.Self.TailscaleIPs),
+	      addrs: arr($s.Self.Addrs),
+	      exitNodeOption: ($s.Self.ExitNodeOption // false),
+	      tags: arr($s.Self.Tags)
+	    },
+	    exitNode: (
+	      if ($s.ExitNodeStatus.ID // "") != "" then {
+	        id: $s.ExitNodeStatus.ID,
+	        ip: ($s.ExitNodeStatus.TailscaleIPs[0] // ""),
+	        online: ($s.ExitNodeStatus.Online // false)
+	      } else null end
+	    ),
+	    prefs: {
+	      wantRunning: ($p.WantRunning // false),
+	      shieldsUp: ($p.ShieldsUp // false),
+	      acceptDNS: ($p.CorpDNS // false),
+	      routeAll: ($p.RouteAll // false),
+	      advertiseExitNode: (arr($p.AdvertiseRoutes) | index("0.0.0.0/0") != null),
+	      advertiseRoutes: arr($p.AdvertiseRoutes),
+	      exitNodeID: ($p.ExitNodeID // ""),
+	      runSSH: ($p.RunSSH // false),
+	      runWebClient: ($p.RunWebClient // false),
+	      netfilterMode: ($p.NetfilterMode // ""),
+	      snatSubnetRoutes: ($p.NoSNAT | not),
+	      hostname: ($p.Hostname // ""),
+	      loggedOut: ($p.LoggedOut // false)
+	    },
+	    peers: [
+	      ($s.Peer // {} | to_entries[]) |
+	      .value |
+	      {
+	        id: .ID,
+	        host: (.HostName // ""),
+	        os: (.OS // ""),
+	        online: (.Online // false),
+	        relay: (.Relay // ""),
+	        ips: arr(.TailscaleIPs),
+	        rx: (.RxBytes // 0),
+	        tx: (.TxBytes // 0),
+	        lastSeen: (.LastSeen // ""),
+	        exitNode: (.ExitNodeOption // false),
+	        active: (.Active // false),
+	        tags: arr(.Tags)
+	      }
+	    ]
+	  }
+	'
+}
+
+# --- prefs / toggles --------------------------------------------------------
+
+api_prefs() { api_status; }
+
+# set <key> <value>
+api_set() {
+	need_cli
+	_k="${1:-}"
+	_v="${2:-}"
+	[ -n "$_k" ] || err "set: missing key"
+
+	case "$_k" in
+	accept-dns | shields-up | accept-routes | advertise-exit-node | run-ssh | run-webclient | snat-subnet-routes)
+		valid_bool "$_v" || err "set: $_k expects true or false, got '$_v'"
+		case "$_k" in
+		accept-dns) _flag="--accept-dns=$_v" ;;
+		shields-up) _flag="--shields-up=$_v" ;;
+		accept-routes) _flag="--accept-routes=$_v" ;;
+		advertise-exit-node) _flag="--advertise-exit-node=$_v" ;;
+		run-ssh) _flag="--ssh=$_v" ;;
+		run-webclient) _flag="--webclient=$_v" ;;
+		snat-subnet-routes) _flag="--snat-subnet-routes=$_v" ;;
+		esac
+		;;
+	netfilter-mode)
+		valid_token "$_v" || err "set: invalid netfilter-mode '$_v'"
+		_flag="--netfilter-mode=$_v"
+		;;
+	hostname)
+		valid_hostname "$_v" || err "set: invalid hostname '$_v'"
+		_flag="--hostname=$_v"
+		;;
+	exit-node)
+		if [ "$_v" = "none" ]; then
+			_flag="--exit-node=none"
+		else
+			valid_token "$_v" || err "set: invalid exit node '$_v'"
+			_flag="--exit-node=$_v"
+		fi
+		;;
+	advertise-routes)
+		# comma-separated CIDRs, e.g. "192.168.1.0/24" or "" to clear
+		if [ -n "$_v" ]; then
+			printf '%s' "$_v" | grep -qE '^[0-9a-fA-F.:/]+(,[0-9a-fA-F.:/]+)*$' \
+				|| err "set: invalid routes '$_v'"
+		fi
+		_flag="--advertise-routes=$_v"
+		;;
+	*)
+		err "set: unknown key '$_k'"
+		;;
+	esac
+
+	# _flag is built only from validated pieces; still guard the empty case.
+	[ -n "$_flag" ] || err "set: nothing to do for '$_k'"
+
+	_out="$(timeout 20 "$TS_CLI" set $_flag 2>&1)" || {
+		printf '{"ok":false,"error":%s}\n' "$("$JQ" -Rn --arg e "${_out:-set failed}" '$e')"
+		return 0
+	}
+	# `tailscale set` is silent on success
+	api_status
+}
+
+# --- login ------------------------------------------------------------------
+
+# update-check — network-backed, slow. Kept separate from `status` so the
+# dashboard never waits on GitHub.
+api_update_check() {
+	need_cli
+	_cur="$(current_version 2>/dev/null || true)"
+	if _lv="$(latest_version 2>/dev/null)" && [ -n "$_lv" ]; then
+		printf '{"ok":true,"current":%s,"latest":%s,"available":%s,"source":"feed"}\n' \
+			"$("$JQ" -Rn --arg c "$_cur" '$c')" \
+			"$("$JQ" -Rn --arg l "$_lv" '$l')" \
+			"$("$JQ" -Rn --arg a "$(version_is_newer "${_cur:-0}" "$_lv" && echo true || echo false)" '$a')"
+		return 0
+	fi
+	_out="$(timeout 60 "$TS_CLI" update --dry-run 2>&1)" || true
+	case "$_out" in
+	*"no update needed"* | *"already running"*)
+		printf '{"ok":true,"current":%s,"latest":%s,"available":false,"source":"binary"}\n' \
+			"$("$JQ" -Rn --arg c "$_cur" '$c')" "$("$JQ" -Rn --arg c "$_cur" '$c')"
+		;;
+	*403* | *"rate limit"*)
+		printf '{"ok":false,"error":"rate limited by GitHub; try again later"}\n'
+		;;
+	*)
+		_lv2="$(printf '%s' "$_out" | sed -n 's/.*to \([0-9][^ ;]*\).*/\1/p' | head -1)"
+		[ -n "$_lv2" ] || _lv2="unknown"
+		printf '{"ok":true,"current":%s,"latest":%s,"available":true,"source":"binary"}\n' \
+			"$("$JQ" -Rn --arg c "$_cur" '$c')" "$("$JQ" -Rn --arg l "$_lv2" '$l')"
+		;;
+	esac
+}
+
+api_login() {
+	need_cli
+	_state="$(ts_json status --json | "$JQ" -r '.BackendState // "NoState"')"
+	case "$_state" in
+	NeedsLogin | NoState | Stopped)
+		;;
+	Running | NeedsMachineAuth | Starting)
+		# already authenticated; nothing to do unless forced
+		printf '{"ok":true,"alreadyLoggedIn":true,"url":"","backend":%s}\n' \
+			"$("$JQ" -Rn --arg b "$_state" '$b')"
+		return 0
+		;;
+	esac
+
+	_tmp="${TS_RUN_DIR}/login.out"
+	: >"$_tmp"
+	chmod 0666 "$_tmp" 2>/dev/null || true
+
+	# tailscale up blocks until the user authorises in a browser, so run it in
+	# the background and scrape the auth URL out of its output.
+	( timeout 300 "$TS_CLI" up >"$_tmp" 2>&1 ) &
+	_up_pid=$!
+
+	_url=""
+	_i=0
+	while [ "$_i" -lt 30 ]; do
+		sleep 1
+		_url="$(grep -oE 'https://login\.tailscale\.com/[a-zA-Z0-9/._?=&-]+' "$_tmp" 2>/dev/null | head -1)"
+		[ -n "$_url" ] && break
+		kill -0 "$_up_pid" 2>/dev/null || break
+		_i=$((_i + 1))
+	done
+
+	printf '{"ok":true,"alreadyLoggedIn":false,"url":%s,"raw":%s}\n' \
+		"$("$JQ" -Rn --arg u "$_url" '$u')" \
+		"$("$JQ" -Rs '.[-400:]' <"$_tmp" 2>/dev/null || printf '""')"
+}
+
+api_logout() {
+	need_cli
+	timeout 20 "$TS_CLI" logout >/dev/null 2>&1 || err "logout failed"
+	api_status
+}
+
+# --- files (Taildrop) --------------------------------------------------------
+
+DEFAULT_ROOTS='["/sdcard/Download","/sdcard/Documents","/data/adb/tailscale/inbox"]'
+
+api_files() {
+	need_cli
+	_dir="${1:-/sdcard/Download}"
+	# allow only real, existing directories under user-writable storage
+	case "$_dir" in
+	/sdcard/* | /storage/emulated/0/* | /data/adb/tailscale/*) ;;
+	*) err "files: directory not allowed: $_dir" ;;
+	esac
+	[ -d "$_dir" ] || err "files: no such directory: $_dir"
+
+	_entries="$(ls -la "$_dir" 2>/dev/null || true)"
+	printf '%s' "$_entries" | "$JQ" -R -s --arg dir "$_dir" --argjson roots "$DEFAULT_ROOTS" '
+	  split("\n") | map(select(length > 0)) |
+	  map(
+	    (.|split(" ")) as $f |
+	    select(($f|length) > 6) |
+	    {
+	      name: ($f[-1] | sub(" ->.*$";"")),
+	      size: (($f[4] // "0") | tonumber? // 0),
+	      dir: (($f[0] | startswith("d")) or ($f[0] | startswith("l")))
+	    }
+	  ) |
+	  { ok: true, dir: $dir, roots: $roots, entries: . }
+	'
+}
+
+# send <peer-ip-or-host> <abs-path>
+api_send() {
+	need_cli
+	_peer="${1:-}"
+	_path="${2:-}"
+	[ -n "$_peer" ] && [ -n "$_path" ] || err "send: usage: send <peer> <path>"
+	valid_token "$_peer" || err "invalid peer: $_peer"
+	case "$_path" in
+	/sdcard/* | /storage/emulated/0/* | /data/*) ;;
+	*) err "send: path not allowed: $_path" ;;
+	esac
+	[ -f "$_path" ] || err "send: no such file: $_path"
+
+	_dest="$(printf '%s:' "$_peer" | sed 's/^\([^:]*\):$/\1:/')"
+	_out="$(timeout 300 "$TS_CLI" file cp "$_path" "$_dest" 2>&1)"
+	_rc=$?
+	if [ "$_rc" -ne 0 ]; then
+		printf '{"ok":false,"error":%s}\n' \
+			"$("$JQ" -Rn --arg e "${_out:-send failed}" '$e')"
+		return 0
+	fi
+	printf '{"ok":true,"sent":%s,"to":%s}\n' \
+		"$("$JQ" -Rn --arg p "$_path" '$p')" \
+		"$("$JQ" -Rn --arg d "$_dest" '$d')"
+}
+
+# receive [wait_seconds] — move whatever is waiting in the Taildrop inbox.
+#
+# `tailscale file get` takes a target DIRECTORY and pulls from every peer at
+# once; it has no per-peer argument. Use --wait to block for new arrivals.
+api_receive() {
+	need_cli
+	_wait="${1:-0}"
+	printf '%s' "$_wait" | grep -qE '^[0-9]{1,4}$' || _wait=0
+
+	_inbox="${TS_DIR}/inbox"
+	mkdir -p "$_inbox"
+	chmod 0700 "$_inbox"
+
+	if [ "$_wait" -gt 0 ]; then
+		_out="$(timeout $((_wait + 10)) "$TS_CLI" file get --wait "$_inbox" 2>&1)"
+	else
+		_out="$(timeout 60 "$TS_CLI" file get "$_inbox" 2>&1)"
+	fi
+	_rc=$?
+
+	printf '{"ok":%s,"dir":%s,"output":%s}\n' \
+		"$([ "$_rc" -eq 0 ] && echo true || echo false)" \
+		"$("$JQ" -Rn --arg d "$_inbox" '$d')" \
+		"$("$JQ" -Rs '.' <<-EOF
+			$_out
+		EOF
+		)"
+}
+
+# --- diagnostics -------------------------------------------------------------
+
+api_logs() {
+	_n="${1:-120}"
+	printf '%s' "$_n" | grep -qE '^[0-9]{1,5}$' || _n=120
+	_tail="$(busybox tail -n "$_n" "${TS_LOG_FILE}" 2>/dev/null || echo '')"
+	printf '{"ok":true,"log":%s}\n' "$("$JQ" -Rs '.' <<-EOF
+		$_tail
+	EOF
+	)"
+}
+
+api_service() {
+	_act="${1:-status}"
+	case "$_act" in
+	start | stop | restart) ;;
+	status) ;;
+	*) err "service: unknown action $_act" ;;
+	esac
+	timeout 90 "${TS_SCRIPTS_DIR}/tailscaled.service" "$_act" >/dev/null 2>&1 || true
+	sleep 2
+	api_status
+}
+
+api_update() {
+	timeout 900 "${TS_SCRIPTS_DIR}/tailscaled.update" run >/dev/null 2>&1 || true
+	api_status
+}
+
+api_version() {
+	printf '{"ok":true,"module":%s,"binary":%s}\n' \
+		"$("$JQ" -Rn --arg m "$(module_version)" '$m')" \
+		"$("$JQ" -Rn --arg b "$("$TS_BIN_DIR/tailscaled" --version 2>/dev/null | head -1 | tr -d ' \r')" '$b')"
+}
+
+case "${1:-}" in
+status) api_status ;;
+prefs) api_prefs ;;
+set)
+	shift
+	api_set "$@"
+	;;
+update-check) api_update_check ;;
+login) api_login ;;
+logout) api_logout ;;
+files) shift; api_files "$@" ;;
+send)
+	shift
+	api_send "$@"
+	;;
+receive)
+	shift
+	api_receive "$@"
+	;;
+logs)
+	shift
+	api_logs "$@"
+	;;
+service)
+	shift
+	api_service "$@"
+	;;
+update) api_update ;;
+version) api_version ;;
+*)
+	err "unknown command: ${1:-<none>}"
+	;;
+esac
