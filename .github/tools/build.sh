@@ -81,6 +81,23 @@ done
 
 rm -f "$DIST_DIR"/Magisk-Tailscaled-*.zip
 
+# jq is as necessary as tailscaled: customize.sh aborts without it, and
+# "full" has to mean offline-installable. It was never fetched here, so the
+# -full zip shipped without it and the install fell back to a download that
+# fails on devices with no HTTPS-capable wget.
+# Asset names are the Android ABI names, not the module's arch names: the repo
+# publishes jq-aarch64-linux-android, not jq-arm64-*. armv7a is spelled
+# "...androideabi" upstream as well.
+JQ_REPO="${JQ_REPO:-theshoqanebi/jq-build-for-android}"
+echo "- Downloading jq (aarch64)"
+if curl -fsSL "https://github.com/${JQ_REPO}/releases/latest/download/jq-aarch64-linux-android" \
+		-o "$BIN_DIR/jq-arm64"; then
+	chmod 0755 "$BIN_DIR/jq-arm64"
+else
+	echo "!! could not fetch jq; -full would not install offline" >&2
+	exit 1
+fi
+
 # Packaging lives in builder/build-module.sh so a CI build and a local build
 # produce the same package. It stages an explicit file list (rather than zipping
 # the whole tree, which used to ship share-app/ source but never the built APK),
