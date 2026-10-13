@@ -87,6 +87,12 @@
 	<string name="sign_in">Sign in</string>
 	<string name="sign_in_body">Open the link to authorise this device, then come back.</string>
 	<string name="already_signed_in">Already signed in</string>
+	<string name="account">Account</string>
+	<string name="not_signed_in">Not signed in</string>
+	<string name="sign_out">Sign out</string>
+	<string name="sign_out_confirm">Sign out of this tailnet? You will need a browser to sign back in.</string>
+	<string name="signed_out">Signed out</string>
+	<string name="sign_in_opened">Finish signing in in the browser, then come back here.</string>
 	<string name="no_login_url">Could not get a login link</string>
 
 	<string name="software">Software</string>
@@ -98,7 +104,12 @@
 	<string name="rollback">Roll back to previous version</string>
 	<string name="rollback_confirm">Restore the previous tailscaled binary?</string>
 	<string name="logs">Daemon log</string>
-	<string name="no_logs">(log is empty)</string>
+	<string name="no_logs">Nothing logged yet.</string>
+	<string name="log_lines">%1$d lines</string>
+	<string name="log_copied">Log copied</string>
+	<string name="close">Close</string>
+	<string name="filter_all">All</string>
+	<string name="filter_problems">Problems</string>
 
 	<string name="about">About</string>
 	<string name="credits_body">Tailscale daemon built from upstream Tailscale with the Android port (kxxt) by paras-moharle.\n\nModule: Magisk-Tailscaled, originally by anasfanani.\nDaemon interface: Tailscale, Inc.\n\nTailscale is a trademark of Tailscale Inc. This app is not affiliated with them.</string>

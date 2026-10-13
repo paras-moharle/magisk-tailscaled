@@ -1,3 +1,43 @@
+## v1.0.1
+
+### The module is no longer confused with the original
+
+`module.prop` carried `id=magisk-tailscaled`, which is the same id as
+[anasfanani/Magisk-Tailscaled](https://github.com/anasfanani/Magisk-Tailscaled).
+Magisk and KernelSU key modules by id, so the two are the same module as far as
+the manager is concerned — which is why managers kept offering "update" for a
+module that was already current.
+
+The id is now `paras-tailscaled`, and `TS_MOD_DIR` follows it.
+
+**Migration:** if you had the old id installed, remove it before flashing this
+one. Both modules drive `/data/adb/tailscale`, and running them together will
+fight over the daemon. Your login survives — `tailscaled.state` lives in
+`/data/adb/tailscale`, which `uninstall.sh` does not touch on a module update,
+and is preserved across installs either way.
+
+### The update feed advertised a stale build
+
+`update.json` still said `v2.1.0.0` / `02010000` from the fork, so every manager
+correctly concluded that an update was available — and would have installed the
+old build. It is now generated from `module.prop` on each release, version and
+versionCode included, and points at the `-full` zip.
+
+### TailBridge
+
+- **Live updates.** Renaming a device in the admin console now shows up within
+  about five seconds instead of waiting for a manual refresh. Only the header
+  and the name rows are repainted, so scrolling and in-progress taps survive.
+- **Root is checked first.** On launch the app asks for root before doing
+  anything else, so a missing grant reads as "grant root permission" rather than
+  as a broken daemon.
+- **Account in the app.** The tailnet you are signed in to is shown under
+  System, with sign-in and sign-out. Sign-in opens the browser directly — there
+  is no interstitial dialog, because Tailscale has no headless auth flow.
+- **A real log viewer.** The daemon log was a plain message box. It is now
+  monospace, colour-coded by severity, with the timestamp dimmed, a
+  problems-only filter, copy and refresh.
+
 ## v2.1.0.0
 
 ### Tailscale binaries now track upstream

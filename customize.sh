@@ -225,6 +225,10 @@ if [ -f "$APP_APK" ]; then
 else
 	ui_print "  APK missing from this package."
 fi
+ui_print ""
+ui_print "  AFTER REBOOT: open TailBridge and grant it root permission --"
+ui_print "  KernelSU Manager -> Superuser -> TailBridge -> allow."
+ui_print "  Without it TailBridge cannot reach the daemon and will say so."
 
 ui_print "- Starting service in background."
 ${TS_SCRIPTS_DIR}/start.sh postinstall 2>&1 &

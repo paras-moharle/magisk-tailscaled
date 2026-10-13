@@ -4,7 +4,9 @@ set -e
 # Custom settings
 
 # Set Magisk Tailscale module variables
-TS_MOD_DIR="/data/adb/modules/magisk-tailscaled" # Bad code, if magisk in the future change the path location, need to change this.
+# Must match `id` in module.prop: Magisk/KernelSU name the module folder
+# after it, and the manager treats two modules with one id as the same.
+TS_MOD_DIR="/data/adb/modules/paras-tailscaled"
 export TS_MOD_PROP="${TS_MOD_DIR}/module.prop"
 
 # Set tailscale directory variables

@@ -95,14 +95,28 @@ jobs:
             ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip?style=flat&logo=docusign&logoColor=green&label=Lightweight)
             ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip?style=flat&logo=docusign&logoColor=green&label=Full%20Package)
 
-      - name: Update JSON with release URLs
+      - name: Update the update feed
         env:
           ASSETS: ${{ steps.release.outputs.assets }}
         run: |
-          ZIP_URL=$(echo '${{ steps.release.outputs.assets }}' | jq -r '.[] | select(.name | endswith(".zip") and (contains("-full") | not)) | .browser_download_url')
-          for json_file in update.json update-arm.json update-arm64.json; do
-            jq --arg url "$ZIP_URL" '.zipUrl = $url' "$json_file" > "${json_file}.tmp" && mv "${json_file}.tmp" "$json_file"
-          done
+          # Must set version AND versionCode, not just the URL. A feed that
+          # keeps an older versionCode is worse than no feed at all: every
+          # manager then offers "update" and would install a stale build.
+          #
+          # Prefer the -full zip: the slim one downloads the daemon during
+          # install and fails on devices whose installer has no HTTPS-capable
+          # wget, which is most modern Android.
+          ZIP_URL=$(echo "$ASSETS" | jq -r '
+            [ .[] | select(.name | endswith(".zip")) ] as $z
+            | (($z[] | select(.name | contains("-full"))) // $z[0]) | .browser_download_url')
+          VERSION=$(grep '^version=' module.prop | cut -d= -f2)
+          VCODE=$(grep '^versionCode=' module.prop | cut -d= -f2)
+          CHANGELOG="https://raw.githubusercontent.com/${GITHUB_REPOSITORY,,}/main/CHANGELOG.md"
+          jq --arg url "$ZIP_URL" --arg v "$VERSION" --arg c "$VCODE" --arg ch "$CHANGELOG" \
+             '.version = $v | .versionCode = $c | .zipUrl = $url | .changelog = $ch' \
+             update.json > update.json.tmp && mv update.json.tmp update.json
+          echo "update.json now:"
+          cat update.json
 
       - name: Commit changes
         run: |

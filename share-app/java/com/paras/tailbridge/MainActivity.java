@@ -59,6 +59,10 @@ public class MainActivity extends Activity {
 	/** pref key -> the switch showing it, so a failed write can be undone. */
 	private final Map<String, CheckBox> switches = new LinkedHashMap<>();
 
+	/** Self-name / address values, patched in place by the poller. */
+	private final List<TextView> nameValues = new ArrayList<>();
+	private final List<String> nameShown = new ArrayList<>();
+
 	private TextView statusView;
 	private TextView versionView;
 	private View dotView;
@@ -77,6 +81,8 @@ public class MainActivity extends Activity {
 
 	private JSONObject status;
 	private String rootError;
+	private boolean polling;
+	private static final long POLL_MS = 5000;
 	private String latestVersion = "";
 
 	private List<String> targets = new ArrayList<>();
@@ -108,6 +114,24 @@ public class MainActivity extends Activity {
 		defaultTargets = getPreferences(0).getString("targets", "");
 		captureShare(getIntent());
 		tab(0);
+		checkRoot();
+	}
+
+	/**
+	 * Root first, before anything else is attempted.
+	 *
+	 * Without it every later failure looks like a broken daemon rather than an
+	 * app the root manager has not been told to trust.
+	 */
+	private void checkRoot() {
+		new Thread(() -> {
+			try {
+				Root.sh("id");
+				ui.post(this::refresh);
+			} catch (Exception e) {
+				ui.post(() -> renderOffline(getString(R.string.need_root_short)));
+			}
+		}).start();
 	}
 
 	@Override
@@ -173,6 +197,13 @@ public class MainActivity extends Activity {
 	protected void onResume() {
 		super.onResume();
 		refresh(false);
+		startPolling();
+	}
+
+	@Override
+	protected void onPause() {
+		super.onPause();
+		stopPolling();
 	}
 
 	private void tab(int n) {
@@ -206,6 +237,10 @@ public class MainActivity extends Activity {
 	// ----------------------------------------------------------------- data
 
 	/** One local root round-trip fills every panel; the network check follows. */
+	private void refresh() {
+		refresh(false);
+	}
+
 	private void refresh(boolean userInitiated) {
 		if (userInitiated) {
 			toast(getString(R.string.checking));
@@ -280,18 +315,82 @@ public class MainActivity extends Activity {
 		}
 	}
 
-	private void render(JSONObject st) {
+	/** Paint the header from a status document. @return true when online. */
+	private boolean applyHeader(JSONObject st) {
 		String backend = st.optString("backend", "?");
 		boolean online = "Running".equals(backend);
 		JSONObject self = st.optJSONObject("self");
 		String host = self == null ? "" : self.optString("host", "");
-		String version = st.optString("version", "?");
 
 		statusView.setText(online ? getString(R.string.connected)
 				: "Stopped".equals(backend) ? getString(R.string.stopped) : backend);
-		versionView.setText((host.isEmpty() ? "" : host + "  ·  ") + "tailscaled " + version);
+		versionView.setText((host.isEmpty() ? "" : host + "  \u00b7  ") + "tailscaled "
+				+ st.optString("version", "?"));
 		dotView.getBackground().mutate().setTint(getColor(
 				online ? R.color.ok : ("Stopped".equals(backend) ? R.color.err : R.color.warn)));
+		return online;
+	}
+
+	/**
+	 * Update only what can change under the user's fingers.
+	 *
+	 * Renaming a device in the admin console is the common case, and waiting for
+	 * a manual refresh made the app look stale. Nothing here rebuilds a panel,
+	 * so the scroll position and any half-finished tap survive.
+	 */
+	private void patchNames(JSONObject st) {
+		JSONObject self = st.optJSONObject("self");
+		if (self == null) {
+			return;
+		}
+		String host = self.optString("host", "");
+		for (int i = 0; i < nameValues.size() && i < nameShown.size(); i++) {
+			if (!nameShown.get(i).equals(host)) {
+				nameValues.get(i).setText(host);
+				nameShown.set(i, host);
+			}
+		}
+	}
+
+	/** Foreground poll. Cheap: one local read, no network. */
+	private final Runnable poll = new Runnable() {
+		@Override
+		public void run() {
+			if (polling) {
+				return;
+			}
+			polling = true;
+			new Thread(() -> {
+				JSONObject st = null;
+				try {
+					st = Api.status();
+				} catch (Exception ignored) {
+					// offline or root gone; leave the screen as it is
+				}
+				final JSONObject fSt = st;
+				ui.post(() -> {
+					polling = false;
+					if (fSt != null) {
+						applyHeader(fSt);
+						patchNames(fSt);
+					}
+				});
+			}).start();
+			ui.postDelayed(this, POLL_MS);
+		}
+	};
+
+	private void startPolling() {
+		ui.removeCallbacks(poll);
+		ui.postDelayed(poll, POLL_MS);
+	}
+
+	private void stopPolling() {
+		ui.removeCallbacks(poll);
+	}
+
+	private void render(JSONObject st) {
+		boolean online = applyHeader(st);
 
 		List<Api.Peer> ps = Api.peersFrom(st);
 		peers.clear();
@@ -312,6 +411,8 @@ public class MainActivity extends Activity {
 	 */
 	private void buildSend(List<Api.Peer> ps, boolean online) {
 		pSend.removeAllViews();
+		nameValues.clear();
+		nameShown.clear();
 		switches.clear();
 		daemonSwitch = null;
 
@@ -328,7 +429,9 @@ public class MainActivity extends Activity {
 		// ── this device ──
 		LinearLayout g = group(pSend, getString(R.string.this_device));
 		if (self != null) {
-			value(g, getString(R.string.device_name), self.optString("host", "\u2014"));
+			TextView nv = value(g, getString(R.string.device_name), self.optString("host", "\u2014"));
+			nameValues.add(nv);
+			nameShown.add(self.optString("host", "\u2014"));
 		}
 		JSONArray ips = self == null ? null : self.optJSONArray("tailscaleIPs");
 		if (ips != null) {
@@ -713,16 +816,20 @@ public class MainActivity extends Activity {
 		value(c, getString(R.string.backend), st.optString("backend", "?"));
 		JSONObject self = st.optJSONObject("self");
 		if (self != null) {
-			value(c, getString(R.string.device_name), self.optString("host", "\u2014"));
+			TextView nv = value(c, getString(R.string.device_name), self.optString("host", "\u2014"));
+			nameValues.add(nv);
+			nameShown.add(self.optString("host", "\u2014"));
 		}
 		JSONObject tn = st.optJSONObject("tailnet");
-		if (tn != null && !tn.optString("name", "").isEmpty()) {
-			value(c, getString(R.string.tailnet), tn.optString("name", ""));
-		}
+		String account = tn == null ? "" : tn.optString("name", "");
 
-		if (!online) {
-			LinearLayout g = group(pSystem, null);
-			action(g, getString(R.string.sign_in), null, v -> doLogin());
+		// ── account ──
+		LinearLayout a1 = group(pSystem, getString(R.string.account));
+		value(a1, getString(R.string.tailnet), account.isEmpty()
+				? getString(R.string.not_signed_in) : account);
+		action(a1, getString(R.string.sign_in), null, v -> doLogin());
+		if (!account.isEmpty()) {
+			action(a1, getString(R.string.sign_out), null, v -> confirmSignOut());
 		}
 
 		LinearLayout u = group(pSystem, getString(R.string.software));
@@ -825,21 +932,190 @@ public class MainActivity extends Activity {
 				.show();
 	}
 
+	/** Log viewer: monospace, colour-coded by severity, filterable, copyable. */
 	private void showLogs() {
 		new Thread(() -> {
 			try {
-				final String log = Api.logs(300);
-				ui.post(() -> alert()
-						.setTitle(R.string.logs)
-						.setMessage(log.isEmpty() ? getString(R.string.no_logs) : log)
-						.setPositiveButton(android.R.string.ok, null)
-						.show());
+				final String log = Api.logs(400);
+				ui.post(() -> logDialog(log));
 			} catch (Exception e) {
 				ui.post(() -> toast(getString(R.string.failed, String.valueOf(e.getMessage()))));
 			}
 		}).start();
 	}
 
+	private void logDialog(String log) {
+		LinearLayout root = new LinearLayout(this);
+		root.setOrientation(LinearLayout.VERTICAL);
+
+		// ── header ──
+		LinearLayout head = new LinearLayout(this);
+		head.setOrientation(LinearLayout.HORIZONTAL);
+		head.setGravity(Gravity.CENTER_VERTICAL);
+		head.setPadding(dp(20), dp(18), dp(12), dp(12));
+
+		LinearLayout titles = new LinearLayout(this);
+		titles.setOrientation(LinearLayout.VERTICAL);
+		TextView t = new TextView(this);
+		t.setText(R.string.logs);
+		t.setTextColor(getColor(R.color.text));
+		t.setTextSize(17);
+		t.setTypeface(null, android.graphics.Typeface.BOLD);
+		titles.addView(t);
+		final TextView count = new TextView(this);
+		count.setTextColor(getColor(R.color.hint));
+		count.setTextSize(12);
+		titles.addView(count);
+		head.addView(titles, new LinearLayout.LayoutParams(0,
+				ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+		final TextView filter = new TextView(this);
+		filter.setText(R.string.filter_all);
+		filter.setTextColor(getColor(R.color.text2));
+		filter.setTextSize(13);
+		filter.setGravity(Gravity.CENTER);
+		filter.setPadding(dp(14), dp(8), dp(14), dp(8));
+		head.addView(filter);
+		root.addView(head);
+
+		// ── body ──
+		android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+		scroll.setPadding(dp(20), 0, dp(20), 0);
+		scroll.setHorizontalScrollBarEnabled(false);
+		TextView body = new TextView(this);
+		body.setTextSize(11);
+		body.setTextColor(getColor(R.color.text2));
+		body.setTypeface(android.graphics.Typeface.MONOSPACE);
+		body.setLineSpacing(dp(3), 1f);
+		body.setPadding(0, dp(4), 0, dp(12));
+		scroll.addView(body, new ViewGroup.LayoutParams(
+				ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+		root.addView(scroll, new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, dp(380)));
+
+		// ── footer ──
+		LinearLayout foot = new LinearLayout(this);
+		foot.setOrientation(LinearLayout.HORIZONTAL);
+		foot.setPadding(dp(12), dp(4), dp(12), dp(12));
+		TextView copy = footButton(R.string.copy);
+		TextView reload = footButton(R.string.refresh);
+		TextView close = footButton(R.string.close);
+		foot.addView(copy, new LinearLayout.LayoutParams(0, dp(44), 1));
+		foot.addView(reload, new LinearLayout.LayoutParams(0, dp(44), 1));
+		foot.addView(close, new LinearLayout.LayoutParams(0, dp(44), 1));
+		root.addView(foot);
+
+		final AlertDialog d = alert().setView(root).create();
+		final String[] lines = log.split("\n");
+		final boolean[] problemsOnly = {false};
+
+		Runnable paint = () -> {
+			CharSequence out = paintLog(lines, problemsOnly[0]);
+			body.setText(out);
+			int shown = problemsOnly[0] ? countProblems(lines) : lines.length;
+			count.setText(getString(R.string.log_lines, shown));
+			filter.setText(problemsOnly[0] ? R.string.filter_all : R.string.filter_problems);
+			scroll.post(() -> scroll.fullScroll(View.FOCUS_UP));
+		};
+
+		filter.setOnClickListener(v -> {
+			problemsOnly[0] = !problemsOnly[0];
+			paint.run();
+		});
+		copy.setOnClickListener(v -> {
+			android.content.ClipboardManager cm = (android.content.ClipboardManager)
+					getSystemService(CLIPBOARD_SERVICE);
+			if (cm != null) {
+				cm.setPrimaryClip(android.content.ClipData.newPlainText("tailscale",
+						String.join("\n", lines)));
+				toast(getString(R.string.log_copied));
+			}
+		});
+		reload.setOnClickListener(v -> {
+			d.dismiss();
+			showLogs();
+		});
+		close.setOnClickListener(v -> d.dismiss());
+
+		paint.run();
+		d.show();
+	}
+
+	private TextView footButton(int label) {
+		TextView b = new TextView(this);
+		b.setText(label);
+		b.setTextColor(getColor(R.color.text));
+		b.setTextSize(14);
+		b.setGravity(Gravity.CENTER);
+		b.setClickable(true);
+		b.setBackgroundResource(R.drawable.row_press);
+		return b;
+	}
+
+	/** Tailscale logs as "YYYY/MM/DD HH:MM:SS [v1] thing: detail". */
+	private CharSequence paintLog(String[] lines, boolean problemsOnly) {
+		android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+		boolean any = false;
+		for (String line : lines) {
+			if (line.trim().isEmpty()) {
+				continue;
+			}
+			boolean problem = isProblem(line);
+			if (problemsOnly && !problem) {
+				continue;
+			}
+			any = true;
+
+			int split = 19;
+			if (line.length() > split && isTimestamp(line.substring(0, split))) {
+				sb.append(line, 0, split);
+				sb.setSpan(new android.text.style.ForegroundColorSpan(
+						getColor(R.color.hint)), sb.length() - split, sb.length(),
+						android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+				sb.append(line, split, line.length());
+			} else {
+				sb.append(line);
+			}
+			int start = sb.length() - line.length();
+			sb.setSpan(new android.text.style.ForegroundColorSpan(
+					getColor(problem ? R.color.err : R.color.text2)), start, sb.length(),
+					android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+			sb.append('\n');
+		}
+		if (!any) {
+			sb.append(getString(R.string.no_logs));
+		}
+		return sb;
+	}
+
+	private int countProblems(String[] lines) {
+		int n = 0;
+		for (String l : lines) {
+			if (!l.trim().isEmpty() && isProblem(l)) {
+				n++;
+			}
+		}
+		return n;
+	}
+
+	private static boolean isProblem(String line) {
+		String l = line.toLowerCase(java.util.Locale.ROOT);
+		return l.contains("error") || l.contains("fatal") || l.contains("panic")
+				|| l.contains("warn") || l.contains("failed") || l.contains("denied");
+	}
+
+	private static boolean isTimestamp(String s) {
+		if (s.length() < 19) {
+			return false;
+		}
+		return Character.isDigit(s.charAt(0)) && s.charAt(4) == '/' && s.charAt(7) == '/'
+				&& s.charAt(10) == ' ' && s.charAt(13) == ':' && s.charAt(16) == ':';
+	}
+
+	/**
+	 * Sign in hands off to the browser: Tailscale has no headless auth flow, and
+	 * this is the only way to authorise a device.
+	 */
 	private void doLogin() {
 		toast(getString(R.string.working));
 		new Thread(() -> {
@@ -856,17 +1132,35 @@ public class MainActivity extends Activity {
 						toast(getString(R.string.no_login_url));
 						return;
 					}
-					alert()
-							.setTitle(R.string.sign_in)
-							.setMessage(R.string.sign_in_body)
-							.setPositiveButton(android.R.string.ok, (d, w) -> open(url))
-							.setNegativeButton(android.R.string.cancel, null)
-							.show();
+					open(url);
+					toast(getString(R.string.sign_in_opened));
 				});
 			} catch (Exception e) {
 				ui.post(() -> toast(getString(R.string.failed, String.valueOf(e.getMessage()))));
 			}
 		}).start();
+	}
+
+	private void confirmSignOut() {
+		alert()
+				.setTitle(R.string.sign_out)
+				.setMessage(R.string.sign_out_confirm)
+				.setPositiveButton(R.string.sign_out, (d, w) -> {
+					new Thread(() -> {
+						try {
+							Api.logout();
+							ui.post(() -> {
+								toast(getString(R.string.signed_out));
+								refresh(false);
+							});
+						} catch (Exception e) {
+							ui.post(() -> toast(getString(R.string.failed,
+									String.valueOf(e.getMessage()))));
+						}
+					}).start();
+				})
+				.setNegativeButton(android.R.string.cancel, null)
+				.show();
 	}
 
 	private void openAppSettings() {
@@ -934,7 +1228,7 @@ public class MainActivity extends Activity {
 	}
 
 	/** A non-interactive row: label left, value right. */
-	private void value(LinearLayout g, String label, String v) {
+	private TextView value(LinearLayout g, String label, String v) {
 		line(g);
 		LinearLayout row = row();
 		TextView l = new TextView(this);
@@ -955,6 +1249,7 @@ public class MainActivity extends Activity {
 		vlp.leftMargin = dp(14);
 		row.addView(val, vlp);
 		g.addView(row);
+		return val;
 	}
 
 	/** A value row that copies when tapped. */
