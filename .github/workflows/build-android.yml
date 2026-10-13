@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -105,4 +106,42 @@ jobs:
             git add tailscale-latest.json
             git commit -m "tailscaled ${{ steps.src.outputs.tag }} is the current Android build"
             git push
+          fi
+
+      # A failed build means every phone stays on the old version forever with
+      # no indication that anything is wrong. File it where it will be seen.
+      - name: Report the failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          TAG="${{ steps.src.outputs.tag }}"
+          [ -n "$TAG" ] || TAG="unknown"
+          TITLE="Android port does not build against Tailscale ${TAG}"
+          LABEL="port-failure"
+
+          # One open issue per version: the daily watcher would otherwise open a
+          # new one every 24h for as long as the break lasts.
+          EXISTING=$(gh issue list --label "$LABEL" --state open \
+            --search "\"$TAG\" in:title" --json number --jq '.[0].number' 2>/dev/null || true)
+
+          BODY=$(cat <<EOF
+          The Android port failed to build against upstream Tailscale \`${TAG}\`.
+
+          Every phone stays on its current \`tailscaled\` until this is fixed --
+          there is no fallback build, because \`port-android.sh\` fails rather
+          than emitting a binary that installs and then misbehaves.
+
+          **Usual cause:** upstream moved or refactored something the port
+          patches. \`builder/port-android.sh\` reports the exact file and the
+          text it expected.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body "$BODY" || true
+          else
+            gh issue create --title "$TITLE" --label "$LABEL" --body "$BODY" || true
           fi
