@@ -25,18 +25,20 @@ echo "========================================"
 # Unauthenticated api.github.com allows 60 requests/hour per IP, and CI plus a
 # phone behind CGNAT can easily exhaust that; /releases/latest/download/ is a
 # plain redirect with no limit.
-FEED_URL="${TS_BIN_FEED:-https://github.com/${TS_BIN_REPO}/releases/latest/download/latest.json}"
+FEED_URL="${TS_BIN_FEED:-https://raw.githubusercontent.com/${TS_BIN_REPO}/main/tailscale-latest.json}"
 
 echo "- Querying ${FEED_URL}"
+echo "    tag: ${FEED_TAG:-latest}"
 FEED_JSON="$(curl -fsSL "$FEED_URL" 2>/dev/null)" || FEED_JSON=""
 if [ -z "$FEED_JSON" ]; then
-	echo "!! Could not reach the release feed (${FEED_URL})" >&2
-	echo "!! The GitHub API is an acceptable fallback for CI." >&2
+	echo "!! Could not reach the pinned feed (${FEED_URL})" >&2
+	echo "!! Falling back to the GitHub API (rate limited)." >&2
 	FEED_JSON="$(curl -fsSL "https://api.github.com/repos/${TS_BIN_REPO}/releases/latest" 2>/dev/null)" || {
-		echo "!! Release feed and API both unreachable; cannot embed binaries." >&2
+		echo "!! Both feed and API unreachable; cannot embed binaries." >&2
 		exit 1
 	}
 fi
+FEED_TAG="$(printf '%s' "$FEED_JSON" | jq -r '.tag // empty' 2>/dev/null)" || FEED_TAG=""
 
 AVAILABLE_ARCH=""
 for ARCH in arm64 arm; do
@@ -60,8 +62,13 @@ for ARCH in arm64 arm; do
 		 else empty end' <<<"$FEED_JSON" 2>/dev/null | head -1)" || URL=""
 
 	if [ -z "$URL" ]; then
-		# release-asset feed: construct the stable download URL
-		URL="https://github.com/${TS_BIN_REPO}/releases/latest/download/${NAME}"
+		# pinned feed gives us the exact release tag: use it so we do not
+		# guess against /releases/latest, which now also publishes module zips.
+		if [ -n "$FEED_TAG" ]; then
+			URL="https://github.com/${TS_BIN_REPO}/releases/download/${FEED_TAG}/${NAME}"
+		else
+			URL="https://github.com/${TS_BIN_REPO}/releases/latest/download/${NAME}"
+		fi
 	fi
 
 	echo "- Downloading ${NAME}..."

@@ -26,7 +26,7 @@ SRC="${1:?usage: port-android.sh <tailscale-checkout>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Release repo the in-binary `tailscale update` will pull from.
-UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/tailscale-android-cli}"
+UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/tailscaled-reborn}"
 
 cd "$SRC"
 
