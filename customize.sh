@@ -47,6 +47,12 @@ fi
 
 SERVICE_DIR="/data/adb/service.d"
 
+# Release repo that hosts the Android tailscaled builds. These are built from
+# upstream Tailscale with the Android port applied (see builder/ in this repo),
+# so a fresh install gets a current binary instead of whatever the upstream
+# module happened to bundle when it was released.
+TS_BIN_REPO="paras-moharle/tailscale-android-cli"
+
 TS_DIR="/data/adb/tailscale"
 TS_BIN_DIR="$TS_DIR/bin"
 TS_SCRIPTS_DIR="$TS_DIR/scripts"
@@ -86,9 +92,24 @@ for f in "$TS_BIN_DIR"/*-"$ARCH"; do
 done
 
 [ -f "$TS_BIN_DIR/tailscaled" ] || {
-	gh_download "anasfanani/tailscale-android-cli" "tailscale_.*_${ARCH}\.tgz" || abort "error: Unable to download."
+	gh_download "$TS_BIN_REPO" "tailscale_.*_${ARCH}\.tgz" || abort "error: Unable to download."
 	tar -xzf "$TMPDIR/$FILENAME" -C $TS_BIN_DIR || abort "error: Unable extract archive."
+	chmod 0755 "$TS_BIN_DIR/tailscaled"
 }
+
+# Fail early and loudly rather than shipping a module that cannot run: a binary
+# that does not execute here will not execute on the device either.
+if [ -f "$TS_BIN_DIR/tailscaled" ]; then
+	chmod 0755 "$TS_BIN_DIR/tailscaled"
+	if ! "$TS_BIN_DIR/tailscaled" --version >/dev/null 2>&1; then
+		ui_print "! Downloaded tailscaled will not run on this device."
+		ui_print "! Check that your kernel supports the required syscalls."
+		abort "error: unusable tailscaled binary."
+	fi
+	ui_print "- tailscaled: $("$TS_BIN_DIR/tailscaled" --version 2>/dev/null | head -1)"
+else
+	abort "error: tailscaled binary missing after download."
+fi
 
 [ -f "$TS_BIN_DIR/jq" ] || {
 	gh_download "theshoqanebi/jq-build-for-android" "jq-${F_ARCH}-linux-android" || abort "error: Unable to download."
@@ -105,6 +126,7 @@ ln -sf "$TS_BIN_DIR/tailscaled" "$TS_BIN_DIR/tailscale"
 ln -sf "$TS_BIN_DIR/"* "$MODPATH/system/bin/"
 
 ln -sf "$TS_SCRIPTS_DIR/tailscaled.service" "$MODPATH/system/bin/"
+ln -sf "$TS_SCRIPTS_DIR/tailscaled.update" "$MODPATH/system/bin/"
 
 ui_print "- Setting permissions"
 set_perm_recursive "$TS_BIN_DIR/" 0 0 0755 0755 "u:object_r:system_file:s0"

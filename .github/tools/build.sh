@@ -22,7 +22,7 @@ for ARCH in arm arm64; do
   esac
   
   echo "- Downloading tailscaled for ${ARCH}..."
-  URL=$(get_latest_release "anasfanani/tailscale-android-cli" "tailscale_.*_${ARCH}\.tgz")
+  URL=$(get_latest_release "paras-moharle/tailscale-android-cli" "tailscale_.*_${ARCH}\.tgz")
   curl -#L "$URL" | tar -xz -C "$BIN_DIR"
   mv "$BIN_DIR/tailscaled" "$BIN_DIR/tailscaled-$ARCH"
   
@@ -32,11 +32,15 @@ for ARCH in arm arm64; do
 done
 
 echo ""
+# builder/ and .github/ are build-time tooling only — they must not ship inside
+# the flashable zip.
+ZIP_EXCL=("*.git*" "dist/*" "*.zip" "*.json" "*.md" "builder/*" ".github/*" ".shellcheckrc")
+
 echo "Creating zip without binaries..."
-zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}.zip" . -x "*.git*" "dist/*" "*.zip" "*.json" "*.md" "${BIN_DIR}/*" ".shellcheckrc" >/dev/null
+zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}.zip" . -x "${ZIP_EXCL[@]}" "${BIN_DIR}/*" >/dev/null
 
 echo "Creating zip with binaries..."
-zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}-full.zip" . -x "*.git*" "dist/*" "*.zip" "*.json" "*.md" ".shellcheckrc" >/dev/null
+zip -9 -r "${DIST_DIR}/Magisk-Tailscaled-${VERSION}-full.zip" . -x "${ZIP_EXCL[@]}" >/dev/null
 
 rm -f "$BIN_DIR"/*
 

@@ -1,0 +1,80 @@
+name: Build Android binaries
+
+# Build a tailscaled for Android from a given upstream Tailscale release,
+# applying the Android port in builder/, and publish it as a GitHub release.
+#
+# Release layout must match what two consumers expect:
+#   * clientupdate/clientupdate_android.go (so `tailscale update` works on device)
+#     looks for tag `v<version>-android` and assets named
+#     `tailscale_<version>_<arch>.tgz`
+#   * customize.sh downloads `tailscale_.*_<arch>.tgz` from the latest release
+
+on:
+  push:
+    tags:
+      - 'v*-android'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream Tailscale tag to build (e.g. v1.104.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'builder/go.mod'
+          check-latest: true
+
+      - name: Determine upstream tag
+        id: src
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            # v1.104.1-android -> v1.104.1
+            TAG="${GITHUB_REF_NAME%-android}"
+            TAG="v${TAG#v}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building upstream $TAG"
+
+      # Fails loudly, on purpose, if upstream refactored something the Android
+      # port depends on. See the comment block in builder/port-android.sh.
+      - name: Build binaries
+        env:
+          TS_UPDATE_REPO: ${{ github.repository }}
+        run: ./builder/build-binaries.sh "${{ steps.src.outputs.tag }}"
+
+      - name: Package module zips
+        run: ./.github/tools/build.sh
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: tailscaled ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-pre') }}
+          generate_release_notes: true
+          body: |
+            Android build of Tailscale, built from upstream `${{ steps.src.outputs.tag }}`
+            with the Android port applied by `builder/port-android.sh`.
+
+            Installed by Magisk-Tailscaled on first install, and by
+            `tailscale update` / `tailscaled.update run` afterwards.
+
+            **Verify before flashing:**
+            ```
+            sha256sum -c SHA256SUMS
+            ```
+          files: |
+            dist/tailscale_*.tgz
+            dist/SHA256SUMS
+            dist/Magisk-Tailscaled-*.zip

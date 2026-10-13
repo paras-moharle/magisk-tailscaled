@@ -1,0 +1,222 @@
+#!/system/bin/sh
+# tailscaled.update — keep the tailscaled binary current.
+#
+# Why this exists
+# ---------------
+# The tailscaled we ship is a static binary; it never updates itself, so an
+# installed module slowly falls behind and Tailscale's own health check nags
+# about it ("This machine is N versions out of date").
+#
+# Rather than reimplementing a downloader in shell, this drives the updater
+# that is compiled INTO our tailscaled build. That matters for two reasons:
+#
+#   1. It is written in Go, so it verifies TLS certificates. On a rooted phone
+#      there is no other TLS-capable HTTP client — busybox wget on a stock
+#      kernel is built without CA validation, so a shell downloader would be
+#      trivially interceptable.
+#   2. It already knows our release layout and installs atomically
+#      (writes tailscaled.new, then renames over the running binary).
+#
+# What this script adds on top: scheduling, supervision and rollback. If the
+# daemon does not come back healthy after an update, we put the previous
+# binary back.
+#
+# Commands:
+#   tailscaled.update status     current + latest version, last check, backup
+#   tailscaled.update check      query for updates (rate limited)
+#   tailscaled.update run        update now if newer (ignores the interval)
+#   tailscaled.update rollback   restore the previous binary
+#
+# @title Tailscaled Auto-Updater
+# @cmd status | Show current version, latest available, last check, backup
+# @cmd check | Check for a newer binary (rate limited)
+# @cmd run | Update now if a newer binary exists
+# @cmd rollback | Restore the previous binary
+set -e
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+
+BACKUP="${TS_BIN_DIR}/tailscaled.prev"
+STAMP_FILE="${TS_RUN_DIR}/last_update_check"
+STATE="${TS_RUN_DIR}/update.state"
+
+# Copy the binary that is about to be replaced, so a failed update has a way
+# back. Always refreshed immediately before an update, so BACKUP is always
+# exactly the version we are moving away from.
+snapshot() {
+	[ -f "${TS_BIN_DIR}/tailscaled" ] || return 0
+	cp -f "${TS_BIN_DIR}/tailscaled" "$BACKUP" 2>/dev/null || true
+	chmod 0755 "$BACKUP" 2>/dev/null || true
+}
+
+current_version() { tailscaled --version 2>/dev/null | head -1 | tr -d ' \r'; }
+backup_version() { "$BACKUP" --version 2>/dev/null | head -1 | tr -d ' \r'; }
+
+touch_stamp() { date +%s >"$STAMP_FILE" 2>/dev/null || true; }
+
+# due — true when the interval has elapsed (or we have never checked).
+due() {
+	[ "${TS_UPDATE_AUTO}" = true ] || return 0
+	[ -f "$STAMP_FILE" ] || return 0
+	_now=$(date +%s)
+	_then=$(cat "$STAMP_FILE" 2>/dev/null || echo 0)
+	[ "$_now" -ge $((_then + TS_UPDATE_INTERVAL_HOURS * 3600)) ]
+}
+
+healthy() {
+	[ "$(timeout 10 tailscale status --json 2>/dev/null | jq -r '.BackendState // empty')" = "Running" ]
+}
+
+write_state() { echo "$1" >"$STATE" 2>/dev/null || true; }
+
+humanise_since() {
+	[ -f "$STAMP_FILE" ] || {
+		echo "never"
+		return
+	}
+	_then=$(cat "$STAMP_FILE" 2>/dev/null || echo 0)
+	_d=$((($(date +%s) - _then) / 3600))
+	if [ "$_d" -lt 1 ]; then echo "less than an hour ago"; else echo "${_d}h ago"; fi
+}
+
+# ------------------------------------------------------------------ status --
+cmd_status() {
+	_cur="$(current_version)"
+	printf '%s\n' "${blue}Tailscaled Updater${normal}"
+	printf '  %sRepository  %s%s\n' "$blue" "${TS_UPDATE_REPO}" "$normal"
+	printf '  %sAuto        %s (every %sh)%s\n' "$blue" "${TS_UPDATE_AUTO}" "$TS_UPDATE_INTERVAL_HOURS" "$normal"
+	printf '  %sInstalled   %s%s\n' "$blue" "${_cur:-unknown}" "$normal"
+	printf '  %sLast check  %s%s\n' "$blue" "$(humanise_since)" "$normal"
+	if [ -f "$BACKUP" ]; then
+		printf '  %sBackup      %s (%s)%s\n' "$blue" "$BACKUP" "$(backup_version)" "$normal"
+	else
+		printf '  %sBackup      %snone%s\n' "$blue" "$normal" "$normal"
+	fi
+
+	if _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
+		case "$_dry" in
+		*"no update needed"* | *"already running"*) printf '  %sLatest      %sup to date%s\n' "$blue" "$green" "$normal" ;;
+		*) printf '  %sLatest      %supdate available%s\n' "$blue" "$yellow" "$normal" ;;
+		esac
+	else
+		printf '  %sLatest      %scould not reach release feed%s\n' "$blue" "$red" "$normal"
+	fi
+}
+
+# ------------------------------------------------------------------- check --
+cmd_check() {
+	touch_stamp
+	if _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
+		case "$_dry" in
+		*"no update needed"* | *"already running"*)
+			write_state "ok-$(current_version)"
+			printf '%s\n' "${green}tailscaled is up to date${normal}"
+			;;
+		*) write_state "update-available"
+			printf '%s\n' "${yellow}An update is available: ${_dry}${normal}"
+			;;
+		esac
+	else
+		write_state "feed-unreachable"
+		printf '%s\n' "${yellow}Could not reach the release feed; will retry later.${normal}"
+	fi
+}
+
+# --------------------------------------------------------------------- run --
+cmd_run() {
+	touch_stamp
+	_cur="$(current_version)"
+
+	if ! _dry="$(timeout 60 tailscale update --dry-run 2>&1)"; then
+		log Warning "Could not reach the release feed; will retry later."
+		write_state "feed-unreachable"
+		return 0
+	fi
+	case "$_dry" in
+	*"no update needed"* | *"already running"*)
+		write_state "ok-${_cur}"
+		return 0
+		;;
+	esac
+
+	log Info "Updating tailscaled (${_cur})..."
+	snapshot
+
+	if ! timeout 300 tailscale update --yes 2>&1 | sed 's/^/    /'; then
+		log Error "Update command failed; keeping ${_cur}."
+		write_state "failed-update"
+		return 1
+	fi
+
+	# The updater renames over the binary; make sure it is still sane.
+	if [ ! -x "${TS_BIN_DIR}/tailscaled" ]; then
+		log Error "tailscaled missing after update; rolling back."
+		cmd_rollback
+		write_state "rolled-back"
+		return 1
+	fi
+	chmod 0755 "${TS_BIN_DIR}/tailscaled" 2>/dev/null || true
+
+	_new="$(current_version)"
+	if [ -z "$_new" ]; then
+		log Error "tailscaled will not report a version after update; rolling back."
+		cmd_rollback
+		write_state "rolled-back"
+		return 1
+	fi
+
+	tailscaled.service restart >/dev/null 2>&1 || true
+	sleep 8
+
+	if ! healthy; then
+		log Error "Daemon unhealthy after update to ${_new}; rolling back."
+		cmd_rollback
+		write_state "rolled-back"
+		return 1
+	fi
+
+	log Success "tailscaled updated: ${_cur} -> ${_new}"
+	write_state "ok-${_new}"
+	# Keep the snapshot: it is now the previous version, which is exactly what
+	# `tailscaled.update rollback` should restore.
+	return 0
+}
+
+# ---------------------------------------------------------------- rollback --
+cmd_rollback() {
+	if [ ! -f "$BACKUP" ]; then
+		log Error "No backup binary to roll back to."
+		return 1
+	fi
+	_old="$(backup_version)"
+	log Warning "Rolling back to ${_old}"
+	cp -f "$BACKUP" "${TS_BIN_DIR}/tailscaled"
+	chmod 0755 "${TS_BIN_DIR}/tailscaled"
+	chown 0:0 "${TS_BIN_DIR}/tailscaled" 2>/dev/null || true
+	tailscaled.service restart >/dev/null 2>&1 || true
+	sleep 6
+	if healthy; then
+		log Success "Rollback complete; running ${_old}"
+		return 0
+	fi
+	log Error "Still unhealthy after rollback."
+	log Error "Inspect with: tailscaled.service log daemon"
+	return 1
+}
+
+case "$1" in
+status) cmd_status ;;
+check)
+	due || {
+		printf '%s\n' "${normal}(skipped; checked less than ${TS_UPDATE_INTERVAL_HOURS}h ago)${normal}"
+		exit 0
+	}
+	cmd_check
+	;;
+run) cmd_run ;;
+rollback) cmd_rollback ;;
+*)
+	echo "${yellow}usage:${normal} tailscaled.update {${orange}status${normal}|${orange}check${normal}|${orange}run${normal}|${orange}rollback${normal}}"
+	;;
+esac

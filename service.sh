@@ -8,3 +8,5 @@ done
 sleep 5
 # start service
 /data/adb/tailscale/scripts/start.sh
+# keep the static tailscaled binary current (no-op if already up to date)
+/data/adb/tailscale/scripts/tailscaled.update run

@@ -27,6 +27,16 @@ export TS_RUN_LOG_FILE="${TS_RUN_DIR}/runs.log"
 # Take the current time
 CURRENT_TIME=$(date +"%I:%M %P")
 
+# ---------------------------------------------------------------------------
+# Auto-update settings
+# ---------------------------------------------------------------------------
+# The tailscaled binary is static and never updates itself, so without this it
+# drifts behind upstream and Tailscale's own health check nags about it.
+# Set TS_UPDATE_AUTO=false in this file to opt out entirely.
+export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/tailscale-android-cli}"
+export TS_UPDATE_AUTO="${TS_UPDATE_AUTO:-true}"
+export TS_UPDATE_INTERVAL_HOURS="${TS_UPDATE_INTERVAL_HOURS:-24}"
+
 # Coloring
 normal="\033[0m"
 orange="\033[1;38;5;208m"

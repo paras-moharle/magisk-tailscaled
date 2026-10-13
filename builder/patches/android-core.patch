@@ -1,0 +1,1538 @@
+diff --git a/clientupdate/clientupdate.go b/clientupdate/clientupdate.go
+index 20d2e7b..1ebaf84 100644
+--- a/clientupdate/clientupdate.go
++++ b/clientupdate/clientupdate.go
+@@ -205,6 +205,8 @@ func (up *Updater) getUpdateFunction() (fn updateFunction, canAutoUpdate bool) {
+ 	switch runtime.GOOS {
+ 	case "windows":
+ 		return up.updateWindows, true
++	case "android":
++		return up.updateAndroid, true
+ 	case "linux":
+ 		switch distro.Get() {
+ 		case distro.NixOS:
+diff --git a/clientupdate/clientupdate_android.go b/clientupdate/clientupdate_android.go
+new file mode 100644
+index 0000000..104def8
+--- /dev/null
++++ b/clientupdate/clientupdate_android.go
+@@ -0,0 +1,362 @@
++//go:build android
++
++package clientupdate
++
++import (
++	"archive/tar"
++	"compress/gzip"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"regexp"
++	"runtime"
++	"strings"
++
++	"tailscale.com/util/cmpver"
++)
++
++const androidGitHubRepoURL = "https://api.github.com/repos/anasfanani/tailscale-magisk-build/releases"
++
++// updateAndroid handles Tailscale updates on Android (Magisk/system installation).
++// Downloads release from GitHub and extracts binaries to the configured directory.
++func (up *Updater) updateAndroid() error {
++	// Get the download and extract directories
++	downloadDir, dirExtract, err := androidDirectories()
++	if err != nil {
++		return err
++	}
++
++	// Determine the actual track based on current version if not explicitly set
++	// This fixes the issue where CurrentTrack incorrectly identifies -pre builds as stable
++	// when the minor version is even (e.g., 1.84.3-pre has minor=84 which is even)
++	track := up.Track
++	if track == "" || track == CurrentTrack {
++		if strings.Contains(up.currentVersion, "-pre") || strings.Contains(up.currentVersion, "-dev") {
++			track = UnstableTrack
++		} else {
++			track = StableTrack
++		}
++	}
++
++	// Fetch the release information
++	repoURL := androidGitHubRepoURL
++	if up.Version != "" {
++		repoURL = fmt.Sprintf(repoURL+"/tags/v%s-android", up.Version)
++	} else if track == UnstableTrack {
++		// For unstable track, fetch all releases to get the latest (including pre-releases)
++		repoURL = androidGitHubRepoURL
++	} else {
++		repoURL = repoURL + "/latest"
++	}
++
++	release, ver, err := fetchAndroidRelease(repoURL, track)
++	if err != nil {
++		return err
++	}
++
++	// Confirm the update with the user (allow downgrades when specific version is requested)
++	if !confirmAndroidUpdate(up, ver) {
++		return nil
++	}
++
++	// Find the matching asset for the current architecture
++	assetURL, err := findAndroidAsset(release, ver)
++	if err != nil {
++		return err
++	}
++
++	// Download the asset
++	downloadPath, err := downloadAndroidAsset(assetURL, downloadDir, ver)
++	if err != nil {
++		return err
++	}
++
++	// Extract and install
++	if err := extractAndInstallAndroid(downloadPath, dirExtract, up.Logf); err != nil {
++		return err
++	}
++
++	// Cleanup
++	_ = os.RemoveAll(downloadDir)
++
++	up.Logf("Please restart the tailscaled service to apply the update.")
++	return nil
++}
++
++// confirmAndroidUpdate confirms the update with the user, allowing downgrades when a specific version is requested
++func confirmAndroidUpdate(up *Updater, ver string) bool {
++	// Allow downgrades when a specific version is requested
++	if up.Version != "" {
++		if up.Confirm != nil {
++			return up.Confirm(ver)
++		}
++		return true
++	}
++
++	// Determine the current track based on the current version
++	currentTrack := StableTrack
++	if strings.Contains(up.currentVersion, "-pre") || strings.Contains(up.currentVersion, "-dev") {
++		currentTrack = UnstableTrack
++	}
++
++	// Determine the requested track (default to current track if not specified)
++	requestedTrack := up.Track
++	if requestedTrack == "" {
++		requestedTrack = currentTrack
++	}
++
++	// Only check version when we're not switching tracks
++	if requestedTrack == currentTrack {
++		switch c := cmpver.Compare(up.currentVersion, ver); {
++		case c == 0:
++			up.Logf("already running %v version %v; no update needed", currentTrack, ver)
++			return false
++		case c > 0:
++			up.Logf("installed %v version %v is newer than the latest available version %v; no update needed", currentTrack, up.currentVersion, ver)
++			return false
++		}
++	}
++	if up.Confirm != nil {
++		return up.Confirm(ver)
++	}
++	return true
++}
++
++// androidDirectories returns the download and extract directories for Android updates
++// downloadDir: uses TempDir, fallback to current working directory
++// extractDir: uses the directory of the current executable
++func androidDirectories() (downloadDir, extractDir string, err error) {
++	// Determine download directory: TempDir -> cwd -> /tmp
++	downloadDir = os.TempDir()
++	if downloadDir == "" {
++		wd, err := os.Getwd()
++		if err != nil || wd == "" {
++			downloadDir = "."
++		} else {
++			downloadDir = wd
++		}
++	}
++	downloadDir = filepath.Join(downloadDir, "tailscale-android-update")
++
++	// Determine extract directory: symlink -> executable -> cwd -> "."
++	executable, err := os.Executable()
++	if err == nil {
++		// Try to resolve symlinks first
++		realPath, err := filepath.EvalSymlinks(executable)
++		if err == nil && realPath != "" {
++			extractDir = filepath.Dir(realPath)
++		} else if executable != "" {
++			// Fallback to executable directory
++			extractDir = filepath.Dir(executable)
++		}
++	}
++
++	// If still empty, try current working directory
++	if extractDir == "" {
++		wd, err := os.Getwd()
++		if err == nil && wd != "" {
++			extractDir = wd
++		}
++	}
++
++	// Last resort: current directory
++	if extractDir == "" {
++		extractDir = "."
++	}
++
++	return downloadDir, extractDir, nil
++}
++
++// fetchAndroidRelease fetches release information from GitHub API
++// If track is "unstable", it fetches from all releases including pre-releases
++// Otherwise, it only fetches stable releases
++func fetchAndroidRelease(repoURL, track string) (release struct {
++	TagName string `json:"tag_name"`
++	Assets  []struct {
++		Name string `json:"name"`
++		URL  string `json:"browser_download_url"`
++	} `json:"assets"`
++	Prerelease bool `json:"prerelease"`
++}, ver string, err error) {
++	resp, err := http.Get(repoURL)
++	if err != nil {
++		return release, "", fmt.Errorf("failed to fetch releases: %w", err)
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode != http.StatusOK {
++		return release, "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
++	}
++
++	// Check if we're fetching all releases (for unstable track)
++	if strings.HasSuffix(repoURL, "/releases") {
++		// Fetch all releases and find the latest one (including pre-releases)
++		var releases []struct {
++			TagName string `json:"tag_name"`
++			Assets  []struct {
++				Name string `json:"name"`
++				URL  string `json:"browser_download_url"`
++			} `json:"assets"`
++			Prerelease bool `json:"prerelease"`
++		}
++
++		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
++			return release, "", fmt.Errorf("failed to decode releases metadata: %w", err)
++		}
++
++		if len(releases) == 0 {
++			return release, "", fmt.Errorf("no releases found")
++		}
++
++		// Get the first release (latest)
++		release.TagName = releases[0].TagName
++		release.Assets = releases[0].Assets
++		release.Prerelease = releases[0].Prerelease
++	} else {
++		// Single release (latest or specific tag)
++		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
++			return release, "", fmt.Errorf("failed to decode release metadata: %w", err)
++		}
++	}
++
++	// If fetching latest and it's a pre-release, skip it for stable track
++	if track != UnstableTrack && release.Prerelease {
++		return release, "", fmt.Errorf("latest release is a pre-release; use --track=unstable to update to pre-releases")
++	}
++
++	ver = strings.TrimPrefix(release.TagName, "v")
++	// For pre-releases, convert -android-pre to -pre
++	if strings.HasSuffix(ver, "-android-pre") {
++		ver = strings.TrimSuffix(ver, "-android-pre")
++		ver = ver + "-pre"
++	} else {
++		ver = strings.TrimSuffix(ver, "-android")
++	}
++
++	return release, ver, nil
++}
++
++// findAndroidAsset finds the correct asset for the current architecture
++func findAndroidAsset(release struct {
++	TagName string `json:"tag_name"`
++	Assets  []struct {
++		Name string `json:"name"`
++		URL  string `json:"browser_download_url"`
++	} `json:"assets"`
++	Prerelease bool `json:"prerelease"`
++}, ver string) (assetURL string, err error) {
++	if runtime.GOARCH != "arm64" && runtime.GOARCH != "arm" {
++		return "", fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
++	}
++
++	// Strip the -pre suffix from version for asset name matching
++	// GitHub release assets are named without -pre (e.g., tailscale_1.84.3_arm64.tgz)
++	assetVer := strings.TrimSuffix(ver, "-pre")
++	assetsName := fmt.Sprintf(`tailscale_%s_%s.tgz`, assetVer, runtime.GOARCH)
++	for _, asset := range release.Assets {
++		matched, err := regexp.MatchString(`^`+assetsName+`$`, asset.Name)
++		if err != nil {
++			return "", fmt.Errorf("failed to match asset name: %w", err)
++		}
++		if matched {
++			return asset.URL, nil
++		}
++	}
++
++	return "", fmt.Errorf("error while fetch release for arch %q, asset name %q, download manually on %q", runtime.GOARCH, assetsName, androidGitHubRepoURL)
++}
++
++// downloadAndroidAsset downloads the release asset
++func downloadAndroidAsset(assetURL, downloadDir, ver string) (downloadPath string, err error) {
++	resp, err := http.Get(assetURL)
++	if err != nil {
++		return "", fmt.Errorf("failed to download asset: %w", err)
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode != http.StatusOK {
++		return "", fmt.Errorf("unexpected status code while downloading asset: %d", resp.StatusCode)
++	}
++
++	if err := os.MkdirAll(downloadDir, 0755); err != nil {
++		return "", fmt.Errorf("failed to create download directory: %w", err)
++	}
++
++	// Strip the -pre suffix from version for asset name (matches GitHub release asset naming)
++	assetVer := strings.TrimSuffix(ver, "-pre")
++	assetsName := fmt.Sprintf(`tailscale_%s_%s.tgz`, assetVer, runtime.GOARCH)
++	downloadPath = filepath.Join(downloadDir, assetsName)
++	out, err := os.Create(downloadPath)
++	if err != nil {
++		return "", fmt.Errorf("failed to create file: %w", err)
++	}
++	defer out.Close()
++
++	if _, err := io.Copy(out, resp.Body); err != nil {
++		return "", fmt.Errorf("failed to save downloaded file: %w", err)
++	}
++
++	return downloadPath, nil
++}
++
++// extractAndInstallAndroid extracts and installs the downloaded tarball
++func extractAndInstallAndroid(downloadPath, dirExtract string, logf func(string, ...interface{})) error {
++	file, err := os.Open(downloadPath)
++	if err != nil {
++		return fmt.Errorf("failed to open downloaded file: %w", err)
++	}
++	defer file.Close()
++
++	gzipReader, err := gzip.NewReader(file)
++	if err != nil {
++		return fmt.Errorf("failed to create gzip reader: %w", err)
++	}
++	defer gzipReader.Close()
++
++	tarReader := tar.NewReader(gzipReader)
++	for {
++		header, err := tarReader.Next()
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			return fmt.Errorf("failed to read tar header: %w", err)
++		}
++
++		if header.Typeflag != tar.TypeReg {
++			continue
++		}
++
++		// Only extract tailscaled binary
++		if header.Name != "tailscaled" {
++			continue
++		}
++
++		// Install as "tailscaled" in the extract directory
++		destPath := filepath.Join(dirExtract, "tailscaled")
++		destFile, err := os.Create(destPath + ".new")
++		if err != nil {
++			return fmt.Errorf("failed to create destination file: %w", err)
++		}
++		defer destFile.Close()
++
++		if _, err := io.Copy(destFile, tarReader); err != nil {
++			return fmt.Errorf("failed to extract file: %w", err)
++		}
++
++		if err := os.Chmod(destPath+".new", os.FileMode(0755)|os.ModePerm); err != nil {
++			return fmt.Errorf("failed to set executable permissions: %w", err)
++		}
++
++		if err := os.Rename(destPath+".new", destPath); err != nil {
++			return fmt.Errorf("failed to rename file: %w", err)
++		}
++
++		logf("Extracted %s to %s", header.Name, destPath)
++	}
++
++	return nil
++}
+diff --git a/clientupdate/clientupdate_notandroid.go b/clientupdate/clientupdate_notandroid.go
+new file mode 100644
+index 0000000..ec0fd3a
+--- /dev/null
++++ b/clientupdate/clientupdate_notandroid.go
+@@ -0,0 +1,10 @@
++// Copyright (c) Tailscale Inc & AUTHORS
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build !android
++
++package clientupdate
++
++func (up *Updater) updateAndroid() error {
++	panic("unreachable")
++}
+diff --git a/cmd/tailscaled/tailscaled.go b/cmd/tailscaled/tailscaled.go
+index 1b0ee60..e1317d6 100644
+--- a/cmd/tailscaled/tailscaled.go
++++ b/cmd/tailscaled/tailscaled.go
+@@ -69,9 +69,48 @@
+ 	"tailscale.com/wgengine/router"
+ )
+ 
++// createTailscaleSymlink creates a 'tailscale' symlink pointing to the current
++// 'tailscaled' binary on Android, enabling the combined binary to work with both names.
++func createTailscaleSymlink() {
++	// Get the path to the current executable
++	execPath, err := os.Executable()
++	if err != nil {
++		return // Silently fail, not critical
++	}
++
++	// Resolve symlinks to get the real binary path
++	realPath, err := filepath.EvalSymlinks(execPath)
++	if err != nil {
++		realPath = execPath // Fallback to execPath if symlink resolution fails
++	}
++
++	// Get the binary name and directory
++	binName := filepath.Base(realPath)
++	binDir := filepath.Dir(realPath)
++	symlinkPath := filepath.Join(binDir, "tailscale")
++
++	// Check if 'tailscale' already exists
++	if _, err := os.Lstat(symlinkPath); err == nil {
++		// File exists, check if it's already a symlink to us
++		if target, err := os.Readlink(symlinkPath); err == nil {
++			// It's a symlink, check if it points to our binary
++			if target == binName {
++				return // Already correctly set up
++			}
++		}
++		// Exists but not the right symlink, remove it
++		os.Remove(symlinkPath)
++	}
++
++	// Create the symlink: tailscale -> <actual binary name>
++	_ = os.Symlink(binName, symlinkPath)
++}
++
+ // defaultTunName returns the default tun device name for the platform.
+ func defaultTunName() string {
+ 	switch runtime.GOOS {
++	case "android":
++		return "tailscale0,userspace-networking"
+ 	case "openbsd":
+ 		return "tun"
+ 	case "windows":
+@@ -199,6 +238,12 @@ func shouldRunCLI() bool {
+ 
+ func main() {
+ 	envknob.PanicIfAnyEnvCheckedInInit()
++
++	// On Android, ensure 'tailscale' symlink exists for combined binary compatibility
++	if runtime.GOOS == "android" {
++		createTailscaleSymlink()
++	}
++
+ 	if shouldRunCLI() {
+ 		beCLI()
+ 		return
+@@ -231,7 +276,7 @@ func main() {
+ 		flag.StringVar(&args.birdSocketPath, "bird-socket", "", "path of the bird unix socket")
+ 	}
+ 	flag.BoolVar(&printVersion, "version", false, "print version information and exit")
+-	flag.BoolVar(&args.disableLogs, "no-logs-no-support", false, "disable log uploads; this also disables any technical support")
++	flag.BoolVar(&args.disableLogs, "no-logs-no-support", true, "disable log uploads; this also disables any technical support")
+ 	flag.StringVar(&args.confFile, "config", "", "path to config file, or 'vm:user-data' to use the VM's user-data (EC2); prefix with 'optional:' to boot unconfigured when the source is absent instead of failing")
+ 	if buildfeatures.HasTPM {
+ 		flag.Var(&args.hardwareAttestation, "hardware-attestation", `use hardware-backed keys to bind node identity to this device when supported
+diff --git a/feature/taildrop/paths.go b/feature/taildrop/paths.go
+index 76054ef..d74cda0 100644
+--- a/feature/taildrop/paths.go
++++ b/feature/taildrop/paths.go
+@@ -7,6 +7,7 @@
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ 
+ 	"tailscale.com/version/distro"
+ )
+@@ -25,6 +26,14 @@ func (e *Extension) SetFileOps(fileOps FileOps) {
+ }
+ 
+ func (e *Extension) setPlatformDefaultDirectFileRoot() {
++	if runtime.GOOS == "android" {
++		dir := "/sdcard/Download/Taildrop"
++		if err := os.MkdirAll(dir, 0o700); err == nil {
++			e.directFileRoot = dir
++		}
++		return
++	}
++
+ 	dg := distro.Get()
+ 
+ 	switch dg {
+diff --git a/hostinfo/hostinfo_android.go b/hostinfo/hostinfo_android.go
+new file mode 100644
+index 0000000..b3ed917
+--- /dev/null
++++ b/hostinfo/hostinfo_android.go
+@@ -0,0 +1,79 @@
++//go:build android
++
++package hostinfo
++
++import (
++	"os/exec"
++	"strings"
++
++	"tailscale.com/tailcfg"
++)
++
++func init() {
++	RegisterHostinfoNewHook(func(hi *tailcfg.Hostinfo) {
++		// Replace generic "node" or "localhost" with meaningful Android hostname
++		if hi.Hostname == "node" || hi.Hostname == "localhost" {
++			hi.Hostname = sanitizeHostname(
++				getSystemProperty("ro.product.manufacturer") + "-" +
++					getSystemProperty("ro.product.model"),
++			)
++			if hi.Hostname == "" {
++				hi.Hostname = "android"
++			}
++		}
++
++		// Set OSVersion if not already set
++		if hi.OSVersion == "" {
++			hi.OSVersion = getSystemProperty("ro.build.version.release")
++		}
++
++		// Ensure Device Model is populated
++		if hi.DeviceModel == "" {
++			hi.DeviceModel = getSystemProperty("ro.product.model")
++		}
++	})
++}
++
++// getSystemProperty reads Android system properties via getprop command
++func getSystemProperty(prop string) string {
++	out, err := exec.Command("getprop", prop).Output()
++	if err != nil {
++		return ""
++	}
++	return strings.TrimSpace(string(out))
++}
++
++// sanitizeHostname removes invalid characters from a hostname.
++// Valid hostnames contain only alphanumerics and hyphens.
++func sanitizeHostname(s string) string {
++	s = strings.ToLower(s)
++	var result strings.Builder
++
++	for _, ch := range s {
++		switch {
++		case (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'):
++			result.WriteRune(ch)
++		case ch == '-' || ch == '_' || ch == ' ':
++			// Convert spaces and underscores to hyphens
++			if result.Len() > 0 && result.String()[result.Len()-1] != '-' {
++				result.WriteRune('-')
++			}
++		}
++	}
++
++	hostname := result.String()
++	// Remove leading/trailing hyphens
++	hostname = strings.Trim(hostname, "-")
++	// Collapse multiple hyphens
++	for strings.Contains(hostname, "--") {
++		hostname = strings.ReplaceAll(hostname, "--", "-")
++	}
++
++	// Limit to 63 characters (max label length in hostname)
++	if len(hostname) > 63 {
++		hostname = hostname[:63]
++		hostname = strings.TrimRight(hostname, "-")
++	}
++
++	return hostname
++}
+diff --git a/ipn/ipnlocal/local.go b/ipn/ipnlocal/local.go
+index d869979..f44c6c3 100644
+--- a/ipn/ipnlocal/local.go
++++ b/ipn/ipnlocal/local.go
+@@ -7943,7 +7943,14 @@ func exitNodeCanProxyDNS(nm *netmap.NetworkMap, peers map[tailcfg.NodeID]tailcfg
+ 	}
+ 	for _, p := range peers {
+ 		if p.StableID() == exitNodeID && peerCanProxyDNS(p) {
+-			return peerAPIBase(nm, p) + "/dns-query", true
++			base := peerAPIBase(nm, p)
++			// When peerCanProxyDNS report as true but no peerAPIBase return empty
++			// Example: exit-node peerapi empty because force relogin with different auth url ( need to restart daemon )
++			if base == "" {
++				return "", false
++			}
++			dohURL = base + "/dns-query"
++			return dohURL, true
+ 		}
+ 	}
+ 	return "", false
+diff --git a/logpolicy/logpolicy.go b/logpolicy/logpolicy.go
+index ac40ce5..8a13371 100644
+--- a/logpolicy/logpolicy.go
++++ b/logpolicy/logpolicy.go
+@@ -259,6 +259,17 @@ func LogsDir(logf logger.Logf) string {
+ 		}
+ 	}
+ 
++	if runtime.GOOS == "android" {
++		if fi, err := os.Stat("/data/adb/tailscale"); err == nil && fi.IsDir() {
++			return "/data/adb/tailscale/log"
++		}
++		prefix := os.Getenv("PREFIX")
++		if prefix == "" {
++			return filepath.Join(os.TempDir(), "tailscale", "log")
++		}
++		return filepath.Join(prefix, "var", "log", "tailscale")
++	}
++
+ 	cacheDir, err := os.UserCacheDir()
+ 	if err == nil {
+ 		d := filepath.Join(cacheDir, "Tailscale")
+diff --git a/net/dns/manager_android.go b/net/dns/manager_android.go
+new file mode 100644
+index 0000000..86ed434
+--- /dev/null
++++ b/net/dns/manager_android.go
+@@ -0,0 +1,111 @@
++// Copyright (c) Tailscale Inc & AUTHORS
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build android
++
++package dns
++
++import (
++	"github.com/coreos/go-iptables/iptables"
++	"tailscale.com/control/controlknobs"
++	"tailscale.com/health"
++	"tailscale.com/net/tsaddr"
++	"tailscale.com/types/logger"
++	"tailscale.com/util/eventbus"
++	"tailscale.com/util/syspolicy/policyclient"
++)
++
++type androidManager struct {
++	logf     logger.Logf
++	hijacked bool
++}
++
++func NewOSConfigurator(logf logger.Logf, _ *health.Tracker, _ *eventbus.Bus, _ policyclient.Client, _ *controlknobs.Knobs, _ string) (OSConfigurator, error) {
++	return &androidManager{logf: logf}, nil
++}
++
++func (m *androidManager) SetDNS(cfg OSConfig) error {
++	shouldHijack := len(cfg.Nameservers) > 0
++
++	if shouldHijack && !m.hijacked {
++		// Enable DNS hijacking
++		if err := setDNSRules(false, true); err != nil {
++			m.logf("dns: failed to setup rules: %v", err)
++			return err
++		}
++		if err := setDNSRules(true, true); err != nil {
++			m.logf("dns: ipv6 rules failed (non-fatal): %v", err)
++		}
++		m.hijacked = true
++		m.logf("dns: hijack enabled")
++	} else if !shouldHijack {
++		// Always clean up rules when DNS is disabled, regardless of tracked state
++		if err := setDNSRules(false, false); err != nil {
++			m.logf("dns: failed to remove rules: %v", err)
++		}
++		if err := setDNSRules(true, false); err != nil {
++			m.logf("dns: ipv6 rules removal failed (non-fatal): %v", err)
++		}
++		if m.hijacked {
++			m.hijacked = false
++			m.logf("dns: hijack disabled")
++		}
++	}
++	return nil
++}
++
++func (m *androidManager) SupportsSplitDNS() bool {
++	return false
++}
++
++func (m *androidManager) GetBaseConfig() (OSConfig, error) {
++	return OSConfig{}, nil
++}
++
++func (m *androidManager) Close() error {
++	if m.hijacked {
++		setDNSRules(false, false)
++		setDNSRules(true, false)
++		m.hijacked = false
++		m.logf("dns: hijack disabled")
++	}
++	return nil
++}
++
++func setDNSRules(ipv6 bool, add bool) error {
++	proto := iptables.ProtocolIPv4
++	dnsIP := tsaddr.TailscaleServiceIPString
++	if ipv6 {
++		proto = iptables.ProtocolIPv6
++		dnsIP = tsaddr.TailscaleServiceIPv6String
++	}
++
++	ipt, err := iptables.NewWithProtocol(proto)
++	if err != nil {
++		return err
++	}
++
++	rules := []struct {
++		table string
++		chain string
++		args  []string
++	}{
++		// Redirect local DNS to Tailscale (exclude tun interfaces)
++		{"nat", "OUTPUT", []string{"!", "-o", "tun+", "!", "-d", dnsIP, "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", dnsIP + ":53"}},
++		// Redirect hotspot DNS to Tailscale (exclude tun interfaces)
++		{"nat", "PREROUTING", []string{"!", "-i", "tun+", "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", dnsIP + ":53"}},
++	}
++
++	for _, rule := range rules {
++		if add {
++			err := ipt.Append(rule.table, rule.chain, rule.args...)
++			if err != nil {
++				return err
++			}
++		} else {
++			ipt.Delete(rule.table, rule.chain, rule.args...)
++		}
++	}
++
++	return nil
++}
+diff --git a/net/dns/resolvconfpath_android.go b/net/dns/resolvconfpath_android.go
+new file mode 100644
+index 0000000..5c5ffa0
+--- /dev/null
++++ b/net/dns/resolvconfpath_android.go
+@@ -0,0 +1,25 @@
++//go:build android
++
++package dns
++
++import (
++	"os"
++	"path/filepath"
++)
++
++var (
++	resolvConf string
++	backupConf string
++)
++
++func init() {
++	prefix := os.Getenv("PREFIX")
++	if fi, err := os.Stat("/data/adb/tailscale"); err == nil && fi.IsDir() {
++		prefix = "/data/adb/tailscale"
++	} else if prefix == "" {
++		prefix = filepath.Join(os.TempDir(), "tailscale")
++	}
++	dnsDir := filepath.Join(prefix, "etc")
++	resolvConf = filepath.Join(dnsDir, "resolv.conf")
++	backupConf = filepath.Join(dnsDir, "resolv.pre-tailscale-backup.conf")
++}
+diff --git a/net/netmon/state.go b/net/netmon/state.go
+index c5e356c..ca2a239 100644
+--- a/net/netmon/state.go
++++ b/net/netmon/state.go
+@@ -14,6 +14,7 @@
+ 	"sort"
+ 	"strings"
+ 
++	"github.com/wlynxg/anet"
+ 	"tailscale.com/envknob"
+ 	"tailscale.com/feature"
+ 	"tailscale.com/feature/buildfeatures"
+@@ -175,6 +176,10 @@ func (i Interface) Addrs() ([]net.Addr, error) {
+ 	if i.Interface == nil {
+ 		return nil, nil
+ 	}
++	// use the netmon package to get the addresses
++	if runtime.GOOS == "android" {
++		return anet.InterfaceAddrsByInterface(i.Interface)
++	}
+ 
+ 	return i.Interface.Addrs()
+ }
+@@ -535,6 +540,9 @@ func (s *State) AnyInterfaceUp() bool {
+ 	if runtime.GOOS == "js" || runtime.GOOS == "tamago" {
+ 		return true
+ 	}
++	if envknob.Bool("TS_ASSUME_NETWORK_UP_FOR_TEST") {
++		return true
++	}
+ 	return s != nil && (s.HaveV4 || s.HaveV6)
+ }
+ 
+@@ -851,6 +859,19 @@ func netInterfaces() ([]Interface, error) {
+ 	if altNetInterfaces != nil {
+ 		return altNetInterfaces()
+ 	}
++	// On Android use anet so interfaces/addresses are enumerated from
++	// /proc rather than netlink, which is restricted for non-VPN apps.
++	if runtime.GOOS == "android" {
++		ifs, err := anet.Interfaces()
++		if err != nil {
++			return nil, err
++		}
++		ret := make([]Interface, len(ifs))
++		for i := range ifs {
++			ret[i].Interface = &ifs[i]
++		}
++		return ret, nil
++	}
+ 	ifs, err := net.Interfaces()
+ 	if err != nil {
+ 		if f, ok := HookInterfacesFallback.GetOk(); ok {
+diff --git a/net/netns/netns_linux.go b/net/netns/netns_linux.go
+index c9ea740..b7f45e7 100644
+--- a/net/netns/netns_linux.go
++++ b/net/netns/netns_linux.go
+@@ -1,7 +1,7 @@
+ // Copyright (c) Tailscale Inc & contributors
+ // SPDX-License-Identifier: BSD-3-Clause
+ 
+-//go:build linux && !android
++//go:build linux
+ 
+ package netns
+ 
+@@ -113,6 +113,12 @@ func controlC(network, address string, c syscall.RawConn) error {
+ }
+ 
+ func setBypassMark(fd uintptr) error {
++	// Skip when no default route, this will prevent connect: network is unreachable
++	// Example case: force use HTTP_PROXY / HTTPS_PROXY in device without default route / internet route.
++	_, err := netmon.DefaultRouteInterface()
++	if err != nil {
++		return nil
++	}
+ 	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, tsconst.LinuxBypassMarkNum); err != nil {
+ 		return fmt.Errorf("setting SO_MARK bypass: %w", err)
+ 	}
+diff --git a/paths/paths.go b/paths/paths.go
+index 77605a1..9078742 100644
+--- a/paths/paths.go
++++ b/paths/paths.go
+@@ -53,6 +53,16 @@ func WindowsDevTailscaledSocket() string {
+ // DefaultTailscaledSocket returns the path to the tailscaled Unix socket
+ // or the empty string if there's no reasonable default.
+ func DefaultTailscaledSocket() string {
++	if runtime.GOOS == "android" {
++		if fi, err := os.Stat("/data/adb/tailscale"); err == nil && fi.IsDir() {
++			return "/data/adb/tailscale/tailscaled.sock"
++		}
++		prefix := os.Getenv("PREFIX")
++		if prefix == "" {
++			return filepath.Join(os.TempDir(), "tailscale", "tailscaled.sock")
++		}
++		return filepath.Join(prefix, "var", "run", "tailscaled.sock")
++	}
+ 	if runtime.GOOS == "windows" {
+ 		return WindowsProtectedPipePrefix + `Tailscale\tailscaled`
+ 	}
+@@ -131,7 +141,7 @@ func DefaultTailscaledStateDir() string {
+ // when it's absent.
+ func MakeAutomaticStateDir() bool {
+ 	switch runtime.GOOS {
+-	case "plan9":
++	case "plan9", "android":
+ 		return true
+ 	case "linux":
+ 		if distro.Get() == distro.JetKVM {
+diff --git a/paths/paths_unix.go b/paths/paths_unix.go
+index b1556b2..2291247 100644
+--- a/paths/paths_unix.go
++++ b/paths/paths_unix.go
+@@ -33,6 +33,15 @@ func statePath() string {
+ 		return "/Library/Tailscale/tailscaled.state"
+ 	case "aix":
+ 		return "/var/tailscale/tailscaled.state"
++	case "android":
++		if fi, err := os.Stat("/data/adb/tailscale"); err == nil && fi.IsDir() {
++			return "/data/adb/tailscale/tailscaled.state"
++		}
++		prefix := os.Getenv("PREFIX")
++		if prefix == "" {
++			return filepath.Join(os.TempDir(), "tailscale", "tailscaled.state")
++		}
++		return filepath.Join(prefix, "var", "lib", "tailscale", "tailscaled.state")
+ 	default:
+ 		return ""
+ 	}
+diff --git a/ssh/tailssh/incubator.go b/ssh/tailssh/incubator.go
+index 69bb81a..e35251b 100644
+--- a/ssh/tailssh/incubator.go
++++ b/ssh/tailssh/incubator.go
+@@ -7,7 +7,7 @@
+ // and groups to the specified `--uid`, `--gid` and `--groups`, and
+ // then launches the requested `--cmd`.
+ 
+-//go:build (linux && !android) || (darwin && !ios) || freebsd || openbsd
++//go:build (linux && !android) || android || (darwin && !ios) || freebsd || openbsd
+ 
+ package tailssh
+ 
+@@ -47,6 +47,7 @@
+ 
+ const (
+ 	linux   = "linux"
++	android = "android"
+ 	darwin  = "darwin"
+ 	freebsd = "freebsd"
+ 	openbsd = "openbsd"
+@@ -835,6 +836,13 @@ func doDropPrivileges(dlogf logger.Logf, wantUid, wantGid int, supplementaryGrou
+ // via an inherited file instead (see forwardedEnvFile).
+ func (ss *sshSession) incubatorEnv() []string {
+ 	env := envForUser(ss.conn.localUser)
++	if runtime.GOOS == "android" {
++		for _, kv := range os.Environ() {
++			if !strings.HasPrefix(kv, "TS_") {
++				env = append(env, kv)
++			}
++		}
++	}
+ 	for _, kv := range ss.Environ() {
+ 		if acceptEnvPair(kv) {
+ 			env = append(env, kv)
+@@ -869,6 +877,11 @@ func (ss *sshSession) launchProcess() error {
+ 
+ 	cmd := ss.cmd
+ 	cmd.Env = ss.incubatorEnv()
++	if runtime.GOOS == "android" {
++		if home, exists := os.LookupEnv("HOME"); exists {
++			cmd.Dir = home
++		}
++	}
+ 
+ 	if len(forwardedEnv) > 0 {
+ 		// The accepted environment may contain secrets, so it is passed to the child via an
+@@ -1187,6 +1200,8 @@ func (ia *incubatorArgs) loginArgs(loginCmdPath string) []string {
+ 			return []string{loginCmdPath, "-f", ia.localUser, "-p"}
+ 		}
+ 		return []string{loginCmdPath, "-f", ia.localUser, "-h", ia.remoteIP, "-p"}
++	case android:
++		return []string{loginCmdPath}
+ 	case freebsd, openbsd:
+ 		return []string{loginCmdPath, "-fp", "-h", ia.remoteIP, ia.localUser}
+ 	}
+@@ -1216,6 +1231,16 @@ func setGroups(groupIDs []int) error {
+ 		groupIDs = groupIDs[:16]
+ 	}
+ 
++	if runtime.GOOS == "android" {
++		if os.Geteuid() == 0 {
++			err := syscall.Setgroups(groupIDs)
++			if err != nil {
++				fmt.Println("Setgroups failed:", err)
++			}
++		}
++		return nil
++	}
++
+ 	err := syscall.Setgroups(groupIDs)
+ 	if err != nil && os.Geteuid() != 0 && groupsMatchCurrent(groupIDs) {
+ 		// If we're not root, ignore a Setgroups failure if all groups are the same.
+diff --git a/tsconst/linuxfw.go b/tsconst/linuxfw.go
+index 3a7a4cf..7e29ea5 100644
+--- a/tsconst/linuxfw.go
++++ b/tsconst/linuxfw.go
+@@ -13,31 +13,31 @@
+ // that sysadmins would use those. Kubernetes uses a few bits in the
+ // second byte, so we steer clear of that too.
+ //
+-// Empirically, most of the documentation on packet marks on the
+-// internet gives the impression that the marks are 16 bits
+-// wide. Based on this, we theorize that the upper two bytes are
+-// relatively unused in the wild, and so we consume bits 16:23 (the
+-// third byte).
++// Ref: https://www.kxxt.dev/blog/full-tailscale-on-android-and-remote-unlocking/
++// AOSP's code for Fwmark allocation is
++// https://android.googlesource.com/platform/system/netd/+/master/include/Fwmark.h
++//
++// The lower 0-20 bits are already allocated by Android.
++// Bit 21-28 is currently unused.
++// Tailscale uses bits 25-28 and also sets bit 17 (ProtectedFromVPN).
+ //
+ // The constants are in the iptables/iproute2 string format for
+ // matching and setting the bits, so they can be directly embedded in
+ // commands.
+ const (
+ 	// The mask for reading/writing the 'firewall mask' bits on a packet.
+-	// See the comment on the const block on why we only use the third byte.
+-	//
+-	// We claim bits 16:23 entirely. For now we only use the lower four
+-	// bits, leaving the higher 4 bits for future use.
+-	LinuxFwmarkMask    = "0xff0000"
+-	LinuxFwmarkMaskNum = 0xff0000
++	// We claim bits 25:28 entirely.
++	LinuxFwmarkMask    = "0x1e000000"
++	LinuxFwmarkMaskNum = 0x1e000000
+ 
+ 	// Packet is from Tailscale and to a subnet route destination, so
+ 	// is allowed to be routed through this machine.
+-	LinuxSubnetRouteMark    = "0x40000"
+-	LinuxSubnetRouteMarkNum = 0x40000
++	LinuxSubnetRouteMark    = "0x8000000"
++	LinuxSubnetRouteMarkNum = 0x8000000
+ 
+ 	// Packet was originated by tailscaled itself, and must not be
+ 	// routed over the Tailscale network.
+-	LinuxBypassMark    = "0x80000"
+-	LinuxBypassMarkNum = 0x80000
++	// Includes bit 17 (0x20000) ProtectedFromVPN to bypass Android VPN routing.
++	LinuxBypassMark    = "0x10020000"
++	LinuxBypassMarkNum = 0x10020000
+ )
+diff --git a/tsweb/tsweb.go b/tsweb/tsweb.go
+index b5bda2a..0d6ba83 100644
+--- a/tsweb/tsweb.go
++++ b/tsweb/tsweb.go
+@@ -42,6 +42,16 @@
+ var DevMode bool
+ 
+ func DefaultCertDir(leafDir string) string {
++	if runtime.GOOS == "android" {
++		if fi, err := os.Stat("/data/adb/tailscale"); err == nil && fi.IsDir() {
++			return "/data/adb/tailscale/certs"
++		}
++		prefix := os.Getenv("PREFIX")
++		if prefix == "" {
++			return filepath.Join(os.TempDir(), "tailscale", "certs")
++		}
++		return filepath.Join(prefix, "var", "lib", "tailscale", "certs")
++	}
+ 	cacheDir, err := os.UserCacheDir()
+ 	if err == nil {
+ 		return filepath.Join(cacheDir, "tailscale", leafDir)
+diff --git a/util/linuxfw/iptables.go b/util/linuxfw/iptables.go
+index 3bd2c28..cd48b39 100644
+--- a/util/linuxfw/iptables.go
++++ b/util/linuxfw/iptables.go
+@@ -214,6 +214,9 @@ func clearRules(proto iptables.Protocol, logf logger.Logf) error {
+ 	if err := delTSHook(ipt, "filter", "FORWARD", logf); err != nil {
+ 		errs = append(errs, err)
+ 	}
++	if err := delTSHook(ipt, "mangle", "PREROUTING", logf); err != nil {
++		errs = append(errs, err)
++	}
+ 	if err := delTSHook(ipt, "nat", "POSTROUTING", logf); err != nil {
+ 		errs = append(errs, err)
+ 	}
+@@ -224,6 +227,9 @@ func clearRules(proto iptables.Protocol, logf logger.Logf) error {
+ 	if err := delChain(ipt, "filter", "ts-forward"); err != nil {
+ 		errs = append(errs, err)
+ 	}
++	if err := delChain(ipt, "mangle", "ts-prerouting"); err != nil {
++		errs = append(errs, err)
++	}
+ 
+ 	if err := delChain(ipt, "nat", "ts-postrouting"); err != nil {
+ 		errs = append(errs, err)
+diff --git a/util/linuxfw/iptables_runner.go b/util/linuxfw/iptables_runner.go
+index ad983fb..87b875b 100644
+--- a/util/linuxfw/iptables_runner.go
++++ b/util/linuxfw/iptables_runner.go
+@@ -164,6 +164,9 @@ func (i *iptablesRunner) AddHooks() error {
+ 		if err := divert(ipt, "filter", "FORWARD"); err != nil {
+ 			return err
+ 		}
++		if err := divert(ipt, "mangle", "PREROUTING"); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	for _, ipt := range i.getNATTables() {
+@@ -198,6 +201,9 @@ func (i *iptablesRunner) AddChains() error {
+ 		if err := create(ipt, "filter", "ts-forward"); err != nil {
+ 			return err
+ 		}
++		if err := create(ipt, "mangle", "ts-prerouting"); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	for _, ipt := range i.getNATTables() {
+@@ -260,6 +266,30 @@ func (i *iptablesRunner) addBase4(tunname string) error {
+ 		return fmt.Errorf("adding %v in v4/filter/ts-forward: %w", args, err)
+ 	}
+ 
++	// For Android: mark in PREROUTING so routing decision can use the mark
++	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
++	if err := i.ipt4.Append("mangle", "ts-prerouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v4/mangle/ts-prerouting: %w", args, err)
++	}
++
++	// MASQUERADE exit node traffic going to physical interfaces
++	args = []string{"-i", tunname, "!", "-o", tunname, "-j", "MASQUERADE"}
++	if err := i.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
++	}
++
++	// Allow hotspot clients to access Tailscale network
++	args = []string{"-o", tunname, "-j", "MASQUERADE"}
++	if err := i.ipt4.Append("nat", "ts-postrouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v4/nat/ts-postrouting: %w", args, err)
++	}
++
++	// Clamp MSS for forwarded TCP to avoid TLS failures with double-VPN/low MTU tunnels
++	args = []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", "1200"}
++	if err := i.ipt4.Append("mangle", "ts-prerouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v4/mangle/ts-prerouting: %w", args, err)
++	}
++
+ 	return nil
+ }
+ 
+@@ -373,6 +403,34 @@ func (i *iptablesRunner) addBase6(tunname string) error {
+ 		return fmt.Errorf("adding %v in v6/filter/ts-forward: %w", args, err)
+ 	}
+ 
++	// Mark packets from subnetRouter, need enable IP6 NAT zcat /proc/config.gz | grep IP6_NF_NAT 2>/dev/null
++	args = []string{"-i", tunname, "-j", "MARK", "--set-mark", subnetRouteMark + "/" + fwmarkMask}
++	if err := i.ipt6.Append("mangle", "ts-prerouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v6/mangle/ts-prerouting: %w", args, err)
++	}
++
++	// MASQUERADE exit node traffic going to physical interfaces
++	if i.v6NATAvailable {
++		args = []string{"-i", tunname, "!", "-o", tunname, "-j", "MASQUERADE"}
++		if err := i.ipt6.Append("nat", "ts-postrouting", args...); err != nil {
++			return fmt.Errorf("adding %v in v6/nat/ts-postrouting: %w", args, err)
++		}
++	}
++
++	// Allow hotspot clients to access Tailscale network
++	if i.v6NATAvailable {
++		args = []string{"-o", tunname, "-j", "MASQUERADE"}
++		if err := i.ipt6.Append("nat", "ts-postrouting", args...); err != nil {
++			return fmt.Errorf("adding %v in v6/nat/ts-postrouting: %w", args, err)
++		}
++	}
++
++	// Clamp MSS for forwarded TCP to avoid TLS failures with double-VPN/low MTU tunnels
++	args = []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--set-mss", "1200"}
++	if err := i.ipt6.Append("mangle", "ts-prerouting", args...); err != nil {
++		return fmt.Errorf("adding %v in v6/mangle/ts-prerouting: %w", args, err)
++	}
++
+ 	return nil
+ }
+ 
+@@ -385,6 +443,9 @@ func (i *iptablesRunner) DelChains() error {
+ 		if err := delChain(ipt, "filter", "ts-forward"); err != nil {
+ 			return err
+ 		}
++		if err := delChain(ipt, "mangle", "ts-prerouting"); err != nil {
++			return err
++		}
+ 	}
+ 
+ 	for _, ipt := range i.getNATTables() {
+@@ -418,6 +479,9 @@ func (i *iptablesRunner) DelBase() error {
+ 		if err := del(ipt, "filter", "ts-forward"); err != nil {
+ 			return err
+ 		}
++		if err := del(ipt, "mangle", "ts-prerouting"); err != nil {
++			return err
++		}
+ 	}
+ 	for _, ipt := range i.getNATTables() {
+ 		if err := del(ipt, "nat", "ts-postrouting"); err != nil {
+@@ -438,6 +502,9 @@ func (i *iptablesRunner) DelHooks(logf logger.Logf) error {
+ 		if err := delTSHook(ipt, "filter", "FORWARD", logf); err != nil {
+ 			return err
+ 		}
++		if err := delTSHook(ipt, "mangle", "PREROUTING", logf); err != nil {
++			return err
++		}
+ 	}
+ 	for _, ipt := range i.getNATTables() {
+ 		if err := delTSHook(ipt, "nat", "POSTROUTING", logf); err != nil {
+diff --git a/util/osuser/group_ids.go b/util/osuser/group_ids.go
+index 34d15c9..f59faa7 100644
+--- a/util/osuser/group_ids.go
++++ b/util/osuser/group_ids.go
+@@ -19,6 +19,18 @@
+ // an error. It will first try to use the 'id' command to get the group IDs,
+ // and if that fails, it will fall back to the user.GroupIds method.
+ func GetGroupIds(user *user.User) ([]string, error) {
++	if runtime.GOOS == "android" {
++		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++		defer cancel()
++		if out, err := exec.CommandContext(ctx, "id", "-Gz").Output(); err == nil {
++			if len(out) > 0 {
++				return parseGroupIds(out), nil
++			}
++		}
++
++		return []string{"0"}, nil
++	}
++	
+ 	if runtime.GOOS == "plan9" {
+ 		return nil, nil
+ 	}
+diff --git a/util/osuser/user.go b/util/osuser/user.go
+index 3fdbfbb..ecfd005 100644
+--- a/util/osuser/user.go
++++ b/util/osuser/user.go
+@@ -22,6 +22,9 @@
+ 	"tailscale.com/version/distro"
+ )
+ 
++// overrideLookupFunc is set by custom platform-specific implementations.
++var overrideLookupFunc func(string, bool) (*user.User, string, error)
++
+ // LookupByUIDWithShell is like os/user.LookupId but handles a few edge cases
+ // like gokrazy and non-cgo lookups, and returns the user shell. The user shell
+ // lookup is best-effort and may be empty.
+@@ -77,6 +80,11 @@ func lookup(usernameOrUID string, std lookupStd, wantShell bool) (*user.User, st
+ 		return u, shell, err
+ 	}
+ 
++	// Android-specific lookup
++	if runtime.GOOS == "android" && overrideLookupFunc != nil {
++		return overrideLookupFunc(usernameOrUID, wantShell)
++	}
++
+ 	// No getent on Gokrazy. So hard-code the login shell.
+ 	if distro.Get() == distro.Gokrazy {
+ 		var shell string
+diff --git a/util/osuser/user_android.go b/util/osuser/user_android.go
+new file mode 100644
+index 0000000..6fbc91d
+--- /dev/null
++++ b/util/osuser/user_android.go
+@@ -0,0 +1,83 @@
++//go:build android
++
++package osuser
++
++import (
++	"context"
++	"os"
++	"os/exec"
++	"os/user"
++	"strings"
++	"time"
++)
++
++func init() {
++	overrideLookupFunc = androidLookup
++}
++
++// androidLookup handles user lookup on Android systems.
++// On Android, there's no getent command, so we use shell commands (id, etc).
++// androidLookup implements user lookup for Android systems
++func androidLookup(usernameOrUID string, wantShell bool) (*user.User, string, error) {
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++
++	var shell string
++	if wantShell {
++		if out, err := exec.LookPath("bash"); err == nil {
++			shell = out
++		} else if out, err := exec.LookPath("sh"); err == nil {
++			shell = out
++		} else {
++			shell = "/system/bin/sh"
++		}
++	}
++
++	// Try to get info for requested user first
++	uid := getAndroidCommandOutput(ctx, "id", "-u", usernameOrUID, "")
++	if uid == "" {
++		// User doesn't exist, fallback to current user
++		uid = getAndroidCommandOutput(ctx, "id", "-u", "0")
++		usernameOrUID = "root"
++	}
++
++	gid := getAndroidCommandOutput(ctx, "id", "-g", usernameOrUID, "0")
++	username := getAndroidCommandOutput(ctx, "id", "-un", usernameOrUID, usernameOrUID)
++	homeDir := getAndroidHomeDir("/")
++
++	return &user.User{
++		Uid:      uid,
++		Gid:      gid,
++		Username: username,
++		Name:     "Android",
++		HomeDir:  homeDir,
++	}, shell, nil
++}
++
++// getAndroidCommandOutput executes a command and returns trimmed output,
++// or returns the default value (last arg) if the command fails.
++func getAndroidCommandOutput(ctx context.Context, cmd string, args ...string) string {
++	if len(args) == 0 {
++		return ""
++	}
++
++	// Last argument is the default value
++	defaultValue := args[len(args)-1]
++	cmdArgs := args[:len(args)-1]
++
++	out, err := exec.CommandContext(ctx, cmd, cmdArgs...).Output()
++	if err != nil {
++		return defaultValue
++	}
++
++	return strings.TrimSpace(string(out))
++}
++
++// getAndroidHomeDir returns the home directory on Android.
++// Falls back to defaultDir if unable to determine.
++func getAndroidHomeDir(defaultDir string) string {
++	if home, err := os.UserHomeDir(); err == nil {
++		return strings.TrimSpace(home)
++	}
++	return defaultDir
++}
+diff --git a/wgengine/netstack/netstack.go b/wgengine/netstack/netstack.go
+index 0ecd9e2..6155be4 100644
+--- a/wgengine/netstack/netstack.go
++++ b/wgengine/netstack/netstack.go
+@@ -833,6 +833,64 @@ func (ns *Impl) isLoopbackPort(port uint16) bool {
+ 	return false
+ }
+ 
++// handleDNSResponse intercepts DNS responses from netstack and rewrites the source
++// address back to the original DNS server that the client queried.
++// handleDNSQueryCopy processes a DNS query and sends the response back to the client.
++// This is called in a goroutine to avoid blocking the packet processing path.
++func (ns *Impl) handleDNSQueryCopy(query []byte, src, dst netip.AddrPort, ipVersion uint8, proto ipproto.Proto) {
++	// Query Tailscale DNS with timeout
++	ctx, cancel := context.WithTimeout(ns.ctx, 5*time.Second)
++	defer cancel()
++	
++	protoStr := "udp"
++	if proto == ipproto.TCP {
++		protoStr = "tcp"
++	}
++	
++	resp, err := ns.dns.Query(ctx, query, protoStr, src)
++	if err != nil {
++		if debugPackets {
++			ns.logf("DNS hijack query failed: %v", err)
++		}
++		return
++	}
++
++	// Build response packet using packet.Generate
++	// Response goes FROM queried DNS server TO client
++	var respPacket []byte
++	switch ipVersion {
++	case 4:
++		h := packet.UDP4Header{
++			IP4Header: packet.IP4Header{
++				Src:  dst.Addr(),
++				Dst:  src.Addr(),
++				IPID: 0,
++			},
++			SrcPort: dst.Port(),
++			DstPort: src.Port(),
++		}
++		respPacket = packet.Generate(&h, resp)
++	case 6:
++		h := packet.UDP6Header{
++			IP6Header: packet.IP6Header{
++				Src: dst.Addr(),
++				Dst: src.Addr(),
++			},
++			SrcPort: dst.Port(),
++			DstPort: src.Port(),
++		}
++		respPacket = packet.Generate(&h, resp)
++	default:
++		return
++	}
++
++	// Inject response back to TUN
++	if err := ns.tundev.InjectInboundCopy(respPacket); err != nil && debugPackets {
++		ns.logf("DNS hijack inject failed: %v", err)
++	}
++}
++
++// buildUDPResponse4 builds an IPv4 UDP packet with the given parameters
+ // handleLocalPackets is hooked into the tun datapath for packets leaving
+ // the host and arriving at tailscaled. This method returns filter.DropSilently
+ // to intercept a packet for handling, for instance traffic to quad-100.
+@@ -842,6 +900,24 @@ func (ns *Impl) handleLocalPackets(p *packet.Parsed, t *tstun.Wrapper, gro *gro.
+ 		return filter.DropSilently, gro
+ 	}
+ 
++	// Hijack DNS queries to external servers if CorpDNS is enabled
++	if p.Dst.Port() == 53 && (p.IPProto == ipproto.UDP || p.IPProto == ipproto.TCP) {
++		dst := p.Dst.Addr()
++		// Skip hijacking for queries to Tailscale DNS itself
++		if dst != serviceIP && dst != serviceIPv6 {
++			// Only hijack if CorpDNS is enabled (--accept-dns=true)
++			if ns.lb != nil && ns.lb.Prefs().CorpDNS() {
++				// Copy and process DNS query in goroutine
++				if query := p.Payload(); len(query) > 0 {
++					queryCopy := make([]byte, len(query))
++					copy(queryCopy, query)
++					go ns.handleDNSQueryCopy(queryCopy, p.Src, p.Dst, p.IPVersion, p.IPProto)
++				}
++				return filter.DropSilently, gro
++			}
++		}
++	}
++
+ 	// Determine if we care about this local packet.
+ 	dst := p.Dst.Addr()
+ 	serviceName, isVIPServiceIP := ns.atomicIPVIPServiceMap.Load()[dst]
+diff --git a/wgengine/router/osrouter/router_linux.go b/wgengine/router/osrouter/router_linux.go
+index c8b31d0..91ce90f 100644
+--- a/wgengine/router/osrouter/router_linux.go
++++ b/wgengine/router/osrouter/router_linux.go
+@@ -1,7 +1,7 @@
+ // Copyright (c) Tailscale Inc & contributors
+ // SPDX-License-Identifier: BSD-3-Clause
+ 
+-//go:build !android
++//go:build linux
+ 
+ package osrouter
+ 
+@@ -16,6 +16,7 @@
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"runtime"
+ 	"slices"
+ 	"strconv"
+ 	"strings"
+@@ -587,8 +588,10 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
+ 	}
+ 
+ 	// Issue 11405: enable IP forwarding on gokrazy.
++
++	// Also enable IP forwarding on Android.
+ 	advertisingRoutes := len(cfg.SubnetRoutes) > 0
+-	if getDistroFunc() == distro.Gokrazy && advertisingRoutes {
++	if (getDistroFunc() == distro.Gokrazy || runtime.GOOS == "android") && advertisingRoutes {
+ 		r.enableIPForwarding()
+ 	}
+ 
+@@ -1646,11 +1649,80 @@ func mustRouteTable(num int) RouteTable {
+ 	},
+ }
+ 
++// detectAndroidDefaultTable returns the routing table number for the current
++// default route on Android. Returns 0 if detection fails.
++func detectAndroidDefaultTable() int {
++	routes, err := netlink.RouteGet(net.IPv4(8, 8, 8, 8))
++	if err != nil || len(routes) == 0 {
++		return 0
++	}
++	if routes[0].Table > 0 {
++		return routes[0].Table
++	}
++	return 0
++}
++
++// getAndroidIPRules returns Android-specific IP rules, including a dynamic
++// exit node rule that uses the current default network's routing table.
++func getAndroidIPRules() []netlink.Rule {
++	rules := []netlink.Rule{
++		// Priority 7300 (12500): Tailscale CGNAT range (100.64.0.0/10) always uses table 52, before VPN rules
++		// This ensures peer-to-peer traffic doesn't go through other VPNs
++		{
++			Priority: 7300, // 5200 + 7300 = 12500
++			Dst:      netipx.PrefixIPNet(netip.MustParsePrefix("100.64.0.0/10")),
++			Table:    tailscaleRouteTable.Num,
++		},
++		{
++			Priority: 7300, // 5200 + 7300 = 12500
++			Dst:      netipx.PrefixIPNet(netip.MustParsePrefix("fd7a:115c:a1e0::/48")),
++			Table:    tailscaleRouteTable.Num,
++		},
++
++		// Priority 13001: lookup main table for reply traffic marked with SubnetRouteMark.
++		// Un-NATed replies to hotspot clients need the downstream subnet route
++		// (e.g. 10.45.158.0/24 dev wlan2) which the kernel adds to the main table.
++		{
++			Priority: 7801,                            // 5200 + 7801 = 13001
++			Mark:     tsconst.LinuxSubnetRouteMarkNum, // 0x8000000
++			Mask:     tsconst.LinuxFwmarkMaskNum,      // 0x1e000000
++			Table:    mainRouteTable.Num,              // 254
++		},
++
++		// Priority 13001: after Android VPN rules at 13000, before default network (14999+)
++		// When VPN active: VPN rules at 13000 catch traffic first (VPN wins)
++		// When VPN off: Tailscale catches traffic as fallback
++		{
++			Priority: 7801, // 5200 + 7801 = 13001
++			Invert:   true,
++			Mark:     tsconst.LinuxBypassMarkNum,
++			Mask:     tsconst.LinuxFwmarkMaskNum,
++			Table:    tailscaleRouteTable.Num,
++		},
++	}
++
++	// Add exit node rule: route traffic FROM Tailscale network to internet
++	// using the current default network's routing table
++	if table := detectAndroidDefaultTable(); table > 0 {
++		// Traffic from tailscale0 is marked with LinuxSubnetRouteMark in ts-forward
++		rules = append(rules, netlink.Rule{
++			Priority: 7801,                            // 5200 + 7801 = 13001
++			Mark:     tsconst.LinuxSubnetRouteMarkNum, // 0x8000000
++			Mask:     tsconst.LinuxFwmarkMaskNum,
++			Table:    table,
++		})
++	}
++
++	return rules
++}
++
+ // ipRules returns the appropriate list of ip rules to be used by Tailscale. See
+ // comments on baseIPRules and ubntIPRules for more details.
+ func ipRules() []netlink.Rule {
+ 	if getDistroFunc() == distro.UBNT {
+ 		return ubntIPRules
++	} else if runtime.GOOS == "android" {
++		return getAndroidIPRules()
+ 	}
+ 	return baseIPRules
+ }
