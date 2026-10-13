@@ -50,7 +50,7 @@ public class MainActivity extends Activity {
 	private static final String TAG = "TailBridge";
 
 	private static final String CONSOLE_URL = "https://login.tailscale.com/admin/machines";
-	private static final String GITHUB_URL = "https://github.com/paras-moharle/magisk-tailscaled";
+	private static final String GITHUB_URL = "https://github.com/paras-moharle/tailscaled-reborn";
 	private static final int REQ_PICK = 1001;
 
 	private final Handler ui = new Handler(Looper.getMainLooper());

@@ -81,19 +81,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: Magisk Tailscaled ${{ steps.version.outputs.version }}
+          name: Tailscaled Reborn ${{ steps.version.outputs.version }}
           files: dist/*.zip
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.prerelease }}
           append_body: true
           body: |
             ## Downloads
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip** - Lightweight (downloads binaries on install)
-            - **Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip** - Complete package (includes all binaries)
+            - **Tailscaled-Reborn-${{ steps.version.outputs.version }}.zip** - Lightweight (downloads binaries on install)
+            - **Tailscaled-Reborn-${{ steps.version.outputs.version }}-full.zip** - Complete package (includes all binaries)
             
             ## Download Stats
-            ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}.zip?style=flat&logo=docusign&logoColor=green&label=Lightweight)
-            ![GitHub Downloads](https://img.shields.io/github/downloads/anasfanani/Magisk-Tailscaled/${{ steps.version.outputs.version }}/Magisk-Tailscaled-${{ steps.version.outputs.version }}-full.zip?style=flat&logo=docusign&logoColor=green&label=Full%20Package)
+            ![GitHub Downloads](https://img.shields.io/github/downloads/paras-moharle/tailscaled-reborn/${{ steps.version.outputs.version }}/Tailscaled-Reborn-${{ steps.version.outputs.version }}.zip?style=flat&logo=docusign&logoColor=green&label=Lightweight)
+            ![GitHub Downloads](https://img.shields.io/github/downloads/paras-moharle/tailscaled-reborn/${{ steps.version.outputs.version }}/Tailscaled-Reborn-${{ steps.version.outputs.version }}-full.zip?style=flat&logo=docusign&logoColor=green&label=Full%20Package)
 
       - name: Update the update feed
         env:

@@ -260,7 +260,7 @@ api_set() {
 	# _flag is built only from validated pieces; still guard the empty case.
 	[ -n "$_flag" ] || err "set: nothing to do for '$_k'"
 
-	_out="$(timeout 20 "$TS_CLI" set $_flag 2>&1)" || {
+	_out="$(timeout 20 "$TS_CLI" set "$_flag" 2>&1)" || {
 		printf '{"ok":false,"error":%s}\n' "$("$JQ" -Rn --arg e "${_out:-set failed}" '$e')"
 		return 0
 	}

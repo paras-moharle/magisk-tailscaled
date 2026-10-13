@@ -18,7 +18,7 @@ FULL=0
 [ "${1:-}" = "--full" ] && FULL=1
 
 version="$(sed -n 's/^version=//p' "$root/module.prop")"
-name="Magisk-Tailscaled-${version}"
+name="Tailscaled-Reborn-${version}"
 arch="arm64"
 
 say() { printf '%s\n' "$*"; }

@@ -113,7 +113,7 @@ restored automatically.
 
 ## Install
 
-1. Download `Magisk-Tailscaled-v1.0.4-full.zip` from
+1. Download `Tailscaled-Reborn-v1.0.5-full.zip` from
    [releases](../../releases) — **prefer this one**. The slim zip is 68 KB and
    downloads the daemon at install time, which needs a working HTTPS-capable
    `wget`; many modern Android builds have none, and that install will fail. The

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # build.sh — package the flashable module zips.
 #
-#   Magisk-Tailscaled-<ver>.zip       downloads tailscaled at install time
-#   Magisk-Tailscaled-<ver>-full.zip  embeds tailscaled, no download needed
+#   Tailscaled-Reborn-<ver>.zip       downloads tailscaled at install time
+#   Tailscaled-Reborn-<ver>-full.zip  embeds tailscaled, no download needed
 #
 # The second form only differs when a binary for every requested architecture
 # is actually published; otherwise it is skipped rather than shipping a zip
@@ -14,7 +14,7 @@ cd "$(dirname "$0")/../.."
 VERSION="${1:-$(grep '^version=' module.prop | cut -d= -f2)}"
 DIST_DIR="dist"
 BIN_DIR="tailscale/bin"
-TS_BIN_REPO="${TS_BIN_REPO:-paras-moharle/tailscale-android-cli}"
+TS_BIN_REPO="${TS_BIN_REPO:-paras-moharle/tailscaled-reborn}"
 
 mkdir -p "$BIN_DIR" "$DIST_DIR"
 

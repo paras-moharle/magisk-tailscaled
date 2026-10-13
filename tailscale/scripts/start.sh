@@ -4,7 +4,7 @@ DIR=$(dirname "$(realpath "$0")")
 . "$DIR"/../settings.sh
 case "$1" in
     postinstall)
-      rm -rf $TS_RUN_DIR && mkdir -p $TS_RUN_DIR
+      rm -rf "$TS_RUN_DIR" && mkdir -p "$TS_RUN_DIR"
       tailscaled.service restart >> "/dev/null" 2>&1 &
       return 0
     ;;

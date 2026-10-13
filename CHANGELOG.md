@@ -1,3 +1,7 @@
+## v1.0.5 -- repo renamed
+
+GitHub repo `paras-moharle/magisk-tailscaled` renamed to `paras-moharle/tailscaled-reborn`. Old URLs redirect automatically, but settings.sh, module.prop, update.json, the app's about link, and the install zip name now point at the new name directly. The second repo, `paras-moharle/tailscale-android-cli`, has been archived -- it was used for the original binary builds, which build-android.yml now runs from this repository.
+
 ## v1.0.4
 
 ### The auto-updater had never worked

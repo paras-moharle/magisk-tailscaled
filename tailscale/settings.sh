@@ -22,7 +22,7 @@ TS_BIN_DIR="${TS_DIR}/bin"
 # this repo publishes BOTH module releases (v1.0.3) and daemon binaries
 # (v1.105.0-android), so "latest" would flip between the two and break the
 # check roughly half the time. One pinned URL cannot do that.
-export TS_LATEST_URL="${TS_LATEST_URL:-https://raw.githubusercontent.com/paras-moharle/magisk-tailscaled/main/tailscale-latest.json}"
+export TS_LATEST_URL="${TS_LATEST_URL:-https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/tailscale-latest.json}"
 
 # Set path environment for busybox & other.
 export PATH="${TS_DIR}/bin:${TS_DIR}/scripts:/data/adb/magisk:/data/adb/ksu/bin:$PATH:/system/bin:${TS_MOD_DIR}/system/bin"
@@ -112,7 +112,7 @@ CURRENT_TIME=$(date +"%I:%M %P")
 # Set TS_UPDATE_AUTO=false in this file to opt out entirely.
 # Where `tailscale update` fetches the v<version>-android release from. This
 # must be the repo the build workflow actually publishes to.
-export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/magisk-tailscaled}"
+export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/tailscaled-reborn}"
 export TS_UPDATE_AUTO="${TS_UPDATE_AUTO:-true}"
 export TS_UPDATE_INTERVAL_HOURS="${TS_UPDATE_INTERVAL_HOURS:-24}"
 
