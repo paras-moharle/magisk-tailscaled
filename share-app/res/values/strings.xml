@@ -28,6 +28,7 @@
 	<string name="exit_node_suffix">exit node</string>
 	<string name="choose_devices">Send to</string>
 	<string name="pick_a_device">Pick a device first</string>
+	<string name="nothing_picked">No file was selected</string>
 	<string name="no_peers">No devices online. Sign in from the System tab first.</string>
 	<string name="no_peers_short">No devices online</string>
 	<string name="shared_n">%1$d item(s) ready — tick the devices above, then send.</string>

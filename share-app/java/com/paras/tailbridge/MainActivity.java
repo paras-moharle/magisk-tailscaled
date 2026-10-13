@@ -821,6 +821,16 @@ public class MainActivity extends Activity {
 			toast(getString(R.string.pick_a_device));
 			return;
 		}
+		// Remember the chosen peers for the picker's result.
+		//
+		// This line was missing. onActivityResult dispatches to lastPick and
+		// bails out when it is empty -- without this assignment it was always
+		// empty, so every in-app send died silently at the picker: the sheet
+		// opened, a file was chosen, and nothing happened with no error shown.
+		// The share-sheet path never noticed because it routes through
+		// pendingUris instead.
+		lastPick.clear();
+		lastPick.addAll(ips);
 		Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
 		i.addCategory(Intent.CATEGORY_OPENABLE);
 		i.setType("*/*");
@@ -847,9 +857,17 @@ public class MainActivity extends Activity {
 			uris.add(data.getData());
 		}
 		if (uris.isEmpty() || lastPick.isEmpty()) {
+			// Dropping a completed pick quietly is how the missing lastPick
+			// assignment stayed hidden. Say something, even in the log.
+			Log.w(TAG, "picker result dropped: " + uris.size() + " uri(s), "
+					+ lastPick.size() + " target(s)");
+			if (uris.isEmpty()) {
+				toast(getString(R.string.nothing_picked));
+			}
 			return;
 		}
 		dispatch(uris, new ArrayList<>(lastPick));
+		lastPick.clear();
 	}
 
 	/** every file -> every chosen peer, reporting partial failures. */

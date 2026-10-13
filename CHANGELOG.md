@@ -1,3 +1,25 @@
+## v1.0.6
+
+### In-app sends did nothing at all
+
+Tapping "Send to <peer>" opened the file picker, let you choose a file, and
+then silently did nothing. No toast, no error, no log line -- the app behaved
+as though the send had succeeded.
+
+`launchPicker(List<String> ips)` was given the chosen peers and dropped them on
+the floor. The list that `onActivityResult` dispatches to, `lastPick`, was
+declared and read but never written to anywhere in the file, so it was always
+empty and the result handler took its early-return every time.
+
+The share sheet was unaffected because it routes through `pendingUris` and never
+touches `lastPick`. That is why a share-sheet send reached the machine while an
+in-app send vanished, which is the clearest evidence the two paths were never
+equivalent.
+
+The peers are now recorded before the picker opens, and the drop-it-quietly
+branch logs its inputs and tells the user when nothing was picked -- a completed
+picker result that goes nowhere should never again be invisible.
+
 ## v1.0.5 -- repo renamed
 
 GitHub repo `paras-moharle/magisk-tailscaled` renamed to `paras-moharle/tailscaled-reborn`. Old URLs redirect automatically, but settings.sh, module.prop, update.json, the app's about link, and the install zip name now point at the new name directly. The second repo, `paras-moharle/tailscale-android-cli`, has been archived -- it was used for the original binary builds, which build-android.yml now runs from this repository.
