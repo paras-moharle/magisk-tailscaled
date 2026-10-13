@@ -45,7 +45,7 @@ jobs:
           UPSTREAM=${UPSTREAM#v}
 
           # What we have already published for Android.
-          FEED=https://github.com/paras-moharle/tailscale-android-cli/releases/latest/download/latest.json
+          FEED=https://raw.githubusercontent.com/${GITHUB_REPOSITORY,,}/main/tailscale-latest.json
           OURS=$(curl -fsSL "$FEED" 2>/dev/null | jq -r '.version // empty' || true)
 
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"

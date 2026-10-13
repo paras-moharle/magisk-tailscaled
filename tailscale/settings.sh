@@ -18,7 +18,11 @@ TS_BIN_DIR="${TS_DIR}/bin"
 # unauthenticated api.github.com allows only 60 requests/hour per IP, and
 # phones sit behind CGNAT where a whole carrier can share one address, so an
 # API-based check gets 403'd for hours at a time.
-export TS_LATEST_URL="${TS_LATEST_URL:-https://github.com/paras-moharle/tailscale-android-cli/releases/latest/download/latest.json}"
+# The feed is a file on the default branch, not /releases/latest/download/:
+# this repo publishes BOTH module releases (v1.0.3) and daemon binaries
+# (v1.105.0-android), so "latest" would flip between the two and break the
+# check roughly half the time. One pinned URL cannot do that.
+export TS_LATEST_URL="${TS_LATEST_URL:-https://raw.githubusercontent.com/paras-moharle/magisk-tailscaled/main/tailscale-latest.json}"
 
 # Set path environment for busybox & other.
 export PATH="${TS_DIR}/bin:${TS_DIR}/scripts:/data/adb/magisk:/data/adb/ksu/bin:$PATH:/system/bin:${TS_MOD_DIR}/system/bin"
@@ -94,7 +98,9 @@ CURRENT_TIME=$(date +"%I:%M %P")
 # The tailscaled binary is static and never updates itself, so without this it
 # drifts behind upstream and Tailscale's own health check nags about it.
 # Set TS_UPDATE_AUTO=false in this file to opt out entirely.
-export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/tailscale-android-cli}"
+# Where `tailscale update` fetches the v<version>-android release from. This
+# must be the repo the build workflow actually publishes to.
+export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/magisk-tailscaled}"
 export TS_UPDATE_AUTO="${TS_UPDATE_AUTO:-true}"
 export TS_UPDATE_INTERVAL_HOURS="${TS_UPDATE_INTERVAL_HOURS:-24}"
 

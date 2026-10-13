@@ -88,3 +88,21 @@ jobs:
             dist/tailscale_*.tgz
             dist/SHA256SUMS
             dist/latest.json
+
+      # The phone must have ONE stable URL to poll. /releases/latest/ cannot be
+      # used here: this repo also publishes module releases (v1.0.3), so
+      # "latest" flips between a module zip and a daemon binary and the feed
+      # breaks half the time. A file on main has no such ambiguity.
+      - name: Publish the feed pointer
+        run: |
+          set -euo pipefail
+          cp dist/latest.json tailscale-latest.json
+          if git diff --quiet -- tailscale-latest.json; then
+            echo "feed already current"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add tailscale-latest.json
+            git commit -m "tailscaled ${{ steps.src.outputs.tag }} is the current Android build"
+            git push
+          fi
