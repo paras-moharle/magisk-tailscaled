@@ -55,6 +55,20 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The companion app is built from source by the release job -- aapt2,
+      # javac, d8 and apksigner directly, no Gradle. Without this the packaged
+      # zip would ship the app's source but no APK.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;34.0.0 platforms;android-34'
+
       - name: Build
         run: ./.github/tools/build.sh
 

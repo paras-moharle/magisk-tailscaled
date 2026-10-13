@@ -86,11 +86,21 @@ mkdir -p "$dist"
 if [ "$FULL" = 1 ]; then
 	# The slim zip above must stay slim: the installer downloads tailscaled and
 	# jq from the release feed so a version bump does not need a new module.
-	seed="$here/seed-bin"
-	[ -d "$seed" ] || { say "!! --full needs builder/seed-bin/{tailscaled,jq}"; exit 1; }
+	#
+	# Binaries may already be in tailscale/bin (CI downloads them there first)
+	# or in builder/seed-bin (local builds).
+	seed=""
+	for cand in "$root/tailscale/bin" "$here/seed-bin"; do
+		[ -n "$(find "$cand" -maxdepth 1 -name 'tailscaled*' 2>/dev/null)" ] && { seed="$cand"; break; }
+	done
+	[ -n "$seed" ] || { say "!! --full needs tailscaled + jq in tailscale/bin or builder/seed-bin"; exit 1; }
 	mkdir -p "$stage/tailscale/bin"
-	cp "$seed/tailscaled" "$stage/tailscale/bin/tailscaled-${arch}"
-	cp "$seed/jq" "$stage/tailscale/bin/jq-${arch}"
+	cp "$seed/tailscaled-${arch}" "$stage/tailscale/bin/tailscaled-${arch}" 2>/dev/null ||
+		cp "$seed/tailscaled" "$stage/tailscale/bin/tailscaled-${arch}"
+	cp "$seed/jq-${arch}" "$stage/tailscale/bin/jq-${arch}" 2>/dev/null ||
+		cp "$seed/jq" "$stage/tailscale/bin/jq-${arch}"
+	[ -s "$stage/tailscale/bin/tailscaled-${arch}" ] || fail "tailscaled missing from $seed"
+	[ -s "$stage/tailscale/bin/jq-${arch}" ] || fail "jq missing from $seed"
 	( cd "$stage" && zip -qr9 "$dist/${name}-full.zip" . -x '.*' )
 fi
 

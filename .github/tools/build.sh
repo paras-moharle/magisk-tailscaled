@@ -81,25 +81,25 @@ done
 
 rm -f "$DIST_DIR"/Magisk-Tailscaled-*.zip
 
-# build-time tooling must not ship inside the flashable zip
-ZIP_EXCL=("*.git*" "dist/*" "*.zip" "*.json" "*.md" "builder/*" ".github/*" ".shellcheckrc")
+# Packaging lives in builder/build-module.sh so a CI build and a local build
+# produce the same package. It stages an explicit file list (rather than zipping
+# the whole tree, which used to ship share-app/ source but never the built APK),
+# bundles TailBridge.apk, and refuses to emit a package that would fail to
+# install.
+echo "- Building TailBridge"
+./share-app/build.sh
 
-echo "- Creating lightweight zip (downloads binaries on install)"
-zip -9 -qr "${DIST_DIR}/Magisk-Tailscaled-${VERSION}.zip" . \
-	-x "${ZIP_EXCL[@]}" "${BIN_DIR}/*"
-
-echo "- Creating full zip (binaries bundled)"
+echo "- Packaging (slim + full)"
 if [ -n "$AVAILABLE_ARCH" ]; then
-	# Same exclusions, but tailscale/bin is NOT excluded here — that is the
-	# whole point of the full zip.
-	zip -9 -qr "${DIST_DIR}/Magisk-Tailscaled-${VERSION}-full.zip" . \
-		-x "${ZIP_EXCL[@]}"
+	./builder/build-module.sh --full
 else
-	echo "  ! no binaries available; skipping full zip"
+	./builder/build-module.sh
 fi
 
 rm -f "$BIN_DIR"/*
 
+echo ""
+echo "TailBridge:  $(ls -lh share-app/build/TailBridge.apk 2>/dev/null | awk '{print $5}')"
 echo ""
 echo "Build completed successfully!"
 echo "========================================"
