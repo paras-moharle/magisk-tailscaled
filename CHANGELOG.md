@@ -1,3 +1,19 @@
+## v1.0.7
+
+### Removed the original author's Telegram group
+
+`tailscaled.service _troubleshoot` told users who hit a startup failure to
+"Join telegram group at https://t.me/systembinsh/158". That is the original
+author's support channel, inherited along with the rest of the module. It is
+not ours to point people at, and sending strangers to someone else's group is
+exactly the sort of thing that should not ship by accident.
+
+The failure path now prints the commands that actually help -- follow the log,
+check status, check for an update, start again -- instead of a link.
+
+The repository's own homepage and description also pointed at that group and
+copied the upstream summary; both now describe this fork instead.
+
 ## v1.0.6
 
 ### In-app sends did nothing at all

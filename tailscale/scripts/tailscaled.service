@@ -356,7 +356,11 @@ _log(){
 }
 _troubleshoot(){
   echo "${red}Not yet ready!${normal}";
-  echo "${orange}Solution: ${yellow}Join telegram group at: [ ${green}https://t.me/systembinsh/158${normal} ${yellow}]${normal}";
+  echo "${orange}Solution: ${yellow}Read the log and fix the reported error:${normal}";
+  echo "  ${green}logs.sh${normal}        # follow the daemon log";
+  echo "  ${green}status${normal}         # backend, login state, installed version";
+  echo "  ${green}check${normal}          # whether an update is available";
+  echo "${orange}Then start the daemon again: ${yellow}service.sh start${normal}";
 }
 usage(){
     cmd="$1"
