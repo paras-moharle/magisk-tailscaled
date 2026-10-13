@@ -47,8 +47,12 @@ jobs:
         run: |
           VERSION=$(grep '^version=' module.prop | cut -d'=' -f2)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          # Check if it's a build release (last digit is not 0)
+          # Check if it's a build release. Version is vMAJOR.MINOR.PATCH, with an
+          # optional fourth .BUILD component; an absent component is 0, not a
+          # prerelease. Reading f4 of a 3-part version returns "" and used to
+          # mark every release a prerelease.
           BUILD=$(echo "$VERSION" | cut -d'.' -f4)
+          [ -z "$BUILD" ] && BUILD=0
           if [ "$BUILD" != "0" ]; then
             echo "prerelease=true" >> $GITHUB_OUTPUT
           else
