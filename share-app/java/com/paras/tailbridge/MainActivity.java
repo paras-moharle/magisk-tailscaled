@@ -8,6 +8,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
@@ -46,6 +47,8 @@ import java.util.Set;
  */
 public class MainActivity extends Activity {
 
+	private static final String TAG = "TailBridge";
+
 	private static final String CONSOLE_URL = "https://login.tailscale.com/admin/machines";
 	private static final String GITHUB_URL = "https://github.com/paras-moharle/magisk-tailscaled";
 	private static final int REQ_PICK = 1001;
@@ -73,20 +76,19 @@ public class MainActivity extends Activity {
 	private final View[] navs = new View[3];
 
 	private Button sendBtn;
-	private CheckBox daemonSwitch;
 	/** row that offers the software update once a newer build is known. */
 	private View updateRow;
 	private TextView updateTitle;
 	private TextView updateSub;
 
 	private JSONObject status;
-	private String rootError;
 	private boolean polling;
 	private static final long POLL_MS = 5000;
-	private String latestVersion = "";
+	private volatile String latestVersion = "";
 
-	private List<String> targets = new ArrayList<>();
 	private final List<Uri> pendingUris = new ArrayList<>();
+	/** Destinations of the in-flight picker, handed straight to dispatch. */
+	private final List<String> lastPick = new ArrayList<>();
 	private String defaultTargets = "";
 
 	@Override
@@ -135,8 +137,38 @@ public class MainActivity extends Activity {
 	@Override
 	protected void onNewIntent(android.content.Intent intent) {
 		super.onNewIntent(intent);
+		// Without this, getIntent() keeps returning the original MAIN intent and
+		// a later recreation re-reads it instead of the share.
+		setIntent(intent);
 		captureShare(intent);
 		tab(0);
+	}
+
+	@Override
+	protected void onSaveInstanceState(android.os.Bundle out) {
+		super.onSaveInstanceState(out);
+		// A share in progress is the headline feature; losing it to a rotation
+		// or a low-memory kill is not acceptable.
+		ArrayList<String> staged = new ArrayList<>();
+		for (Uri u : pendingUris) {
+			staged.add(u.toString());
+		}
+		out.putStringArrayList("pending", staged);
+	}
+
+	@Override
+	protected void onRestoreInstanceState(android.os.Bundle in) {
+		super.onRestoreInstanceState(in);
+		ArrayList<String> staged = in.getStringArrayList("pending");
+		if (staged != null) {
+			for (String s : staged) {
+				try {
+					pendingUris.add(Uri.parse(s));
+				} catch (Exception ignored) {
+					// drop anything no longer resolvable
+				}
+			}
+		}
 	}
 
 	/**
@@ -167,7 +199,7 @@ public class MainActivity extends Activity {
 			addSharedText(in.getStringExtra(android.content.Intent.EXTRA_TEXT));
 		}
 		if (!pendingUris.isEmpty()) {
-			refresh(false);
+			refresh();
 		}
 	}
 
@@ -194,7 +226,7 @@ public class MainActivity extends Activity {
 	@Override
 	protected void onResume() {
 		super.onResume();
-		refresh(false);
+		refresh();
 		startPolling();
 	}
 
@@ -202,6 +234,14 @@ public class MainActivity extends Activity {
 	protected void onPause() {
 		super.onPause();
 		stopPolling();
+	}
+
+	@Override
+	protected void onDestroy() {
+		super.onDestroy();
+		// Worker threads post back into this Handler; anything still queued
+		// would try to touch a window that no longer exists.
+		ui.removeCallbacksAndMessages(null);
 	}
 
 	private void tab(int n) {
@@ -236,29 +276,20 @@ public class MainActivity extends Activity {
 
 	/** One local root round-trip fills every panel; the network check follows. */
 	private void refresh() {
-		refresh(false);
-	}
-
-	private void refresh(boolean userInitiated) {
-		if (userInitiated) {
-			toast(getString(R.string.checking));
-		}
 		new Thread(() -> {
 			JSONObject st = null;
 			String err = null;
 			try {
 				st = Api.status();
-			} catch (Root.Denied e) {
-				err = getString(R.string.need_root_short);
 			} catch (Exception e) {
-				err = String.valueOf(e.getMessage());
+				err = e instanceof Root.Denied ? getString(R.string.need_root_short)
+						: String.valueOf(e.getMessage());
 			}
 
 			final JSONObject fSt = st;
 			final String fErr = err;
 			ui.post(() -> {
 				status = fSt;
-				rootError = fErr;
 				if (fSt == null) {
 					renderOffline(fErr);
 				} else {
@@ -302,6 +333,13 @@ public class MainActivity extends Activity {
 		pSystem.removeAllViews();
 		nameValues.clear();
 		nameShown.clear();
+		// These point at views we just detached; leaving them reachable lets a
+		// late rollback flip a CheckBox nobody can see.
+		switches.clear();
+		sendBtn = null;
+		updateRow = null;
+		updateTitle = null;
+		updateSub = null;
 
 		android.widget.ScrollView sc = findViewById(R.id.scrollSend);
 		sc.setFillViewport(true);
@@ -448,6 +486,10 @@ public class MainActivity extends Activity {
 		@Override
 		public void run() {
 			if (polling) {
+				// A slow `su` call can outlast the interval. Reschedule anyway,
+				// or the chain dies silently and the header freezes until the
+				// app is backgrounded and resumed.
+				ui.postDelayed(this, POLL_MS);
 				return;
 			}
 			polling = true;
@@ -508,7 +550,6 @@ public class MainActivity extends Activity {
 		nameValues.clear();
 		nameShown.clear();
 		switches.clear();
-		daemonSwitch = null;
 
 		if (chosen.isEmpty() && !defaultTargets.isEmpty()) {
 			for (String n : defaultTargets.split(",")) {
@@ -585,7 +626,7 @@ public class MainActivity extends Activity {
 
 		// ── daemon ──
 		LinearLayout d = group(pSend, getString(R.string.daemon));
-		daemonSwitch = addSwitch(d, getString(R.string.service),
+		addSwitch(d, getString(R.string.service),
 				getString(R.string.service_sub), daemonUp(status),
 				v -> service(v.isChecked() ? "start" : "stop"));
 		action(d, getString(R.string.restart), null, v -> service("restart"));
@@ -664,7 +705,9 @@ public class MainActivity extends Activity {
 		n.setSingleLine(true);
 		col.addView(n);
 		TextView meta = new TextView(this);
-		meta.setText(p.ip + (p.os.isEmpty() ? "" : "  ·  " + p.os));
+		meta.setText(p.ip
+				+ (p.os.isEmpty() ? "" : "  ·  " + p.os)
+				+ (p.exitNode ? "  ·  " + getString(R.string.exit_node_suffix) : ""));
 		meta.setTextColor(getColor(R.color.text2));
 		meta.setTextSize(12);
 		col.addView(meta);
@@ -674,12 +717,8 @@ public class MainActivity extends Activity {
 		row.addView(iconButton(R.drawable.ic_copy, R.color.hint, R.string.copy, v -> copy(p.ip)));
 
 		// Send straight to this one device without touching the selection.
-		row.addView(iconButton(R.drawable.ic_send, R.color.text, R.string.send, v -> {
-			chosen.clear();
-			chosen.add(p.name);
-			saveTargets();
-			launchPicker(java.util.Collections.singletonList(p.ip));
-		}));
+		row.addView(iconButton(R.drawable.ic_send, R.color.text, R.string.send, v ->
+				launchPicker(java.util.Collections.singletonList(p.ip))));
 
 		// Tapping anywhere else on the row is the same as the checkbox.
 		OnToggle peer = () -> {
@@ -687,7 +726,7 @@ public class MainActivity extends Activity {
 				chosen.add(p.name);
 			}
 			saveTargets();
-			refresh(false);
+			refresh();
 		};
 		row.setOnClickListener(v -> peer.run());
 		row.setClickable(true);
@@ -729,7 +768,7 @@ public class MainActivity extends Activity {
 			return;
 		}
 		if (!pendingUris.isEmpty()) {
-			dispatch(new ArrayList<>(pendingUris));
+			dispatch(new ArrayList<>(pendingUris), to);
 			pendingUris.clear();
 			return;
 		}
@@ -763,6 +802,9 @@ public class MainActivity extends Activity {
 		if (sendBtn == null) {
 			return;
 		}
+		// Drop peers that are no longer online, otherwise the button can read
+		// "Send to laptop" while currentTargets() resolves to nothing.
+		chosen.retainAll(peers.keySet());
 		int n = chosen.size();
 		sendBtn.setEnabled(signedIn(status) && n > 0);
 		if (n == 1) {
@@ -779,7 +821,6 @@ public class MainActivity extends Activity {
 			toast(getString(R.string.pick_a_device));
 			return;
 		}
-		targets = new ArrayList<>(ips);
 		Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
 		i.addCategory(Intent.CATEGORY_OPENABLE);
 		i.setType("*/*");
@@ -805,27 +846,31 @@ public class MainActivity extends Activity {
 		} else if (data.getData() != null) {
 			uris.add(data.getData());
 		}
-		if (uris.isEmpty() || targets.isEmpty()) {
+		if (uris.isEmpty() || lastPick.isEmpty()) {
 			return;
 		}
-		dispatch(uris);
+		dispatch(uris, new ArrayList<>(lastPick));
 	}
 
 	/** every file -> every chosen peer, reporting partial failures. */
-	private void dispatch(List<Uri> uris) {
-		final List<String> to = new ArrayList<>(targets.isEmpty() ? currentTargets() : targets);
+	private void dispatch(List<Uri> uris, List<String> to) {
+		final List<String> targets = new ArrayList<>(to);
 		toast(getString(R.string.sending));
 		new Thread(() -> {
 			java.io.File dir = new java.io.File(getCacheDir(), "send");
 			List<java.io.File> files = new ArrayList<>();
+			int failed = 0;
 			for (Uri u : uris) {
 				try {
 					files.add(Stage.copy(this, u, dir));
-				} catch (Exception ignored) {
-					// counted as a failure
+				} catch (Exception e) {
+					// Could not even read the file. Without this the run would
+					// report "sent 0" as a success.
+					failed++;
+					Log.w(TAG, "could not stage " + u + ": " + e);
 				}
 			}
-			int ok = 0, failed = 0;
+			int ok = 0;
 			StringBuilder problems = new StringBuilder();
 			for (String peer : to) {
 				for (java.io.File f : files) {
@@ -855,7 +900,7 @@ public class MainActivity extends Activity {
 							.show();
 				}
 				// Re-read so the staged-items note clears once it is sent.
-				refresh(false);
+				refresh();
 			});
 		}).start();
 	}
@@ -994,11 +1039,14 @@ public class MainActivity extends Activity {
 		value(u, getString(R.string.tailscaled_version), st.optString("version", "?"));
 		value(u, getString(R.string.module_version), st.optString("module", "?"));
 
-		updateRow = action(u, getString(R.string.check_updates), null, v -> updateNow());
+		updateRow = action(u, getString(R.string.check_updates),
+				getString(R.string.update_check_hint), v -> updateNow());
 		updateTitle = updateRow.findViewById(R.id.rowTitle);
 		updateSub = updateRow.findViewById(R.id.rowSub);
 		paintUpdateRow();
 
+		action(u, getString(R.string.receive_files), getString(R.string.receive_files_sub),
+				v -> doReceive());
 		action(u, getString(R.string.rollback), null, v -> rollback());
 		action(u, getString(R.string.logs), null, v -> showLogs());
 
@@ -1016,22 +1064,10 @@ public class MainActivity extends Activity {
 		updateTitle.setText(has ? getString(R.string.install_update, latestVersion)
 				: getString(R.string.check_updates));
 		if (updateSub != null) {
-			updateSub.setVisibility(has ? View.VISIBLE : View.GONE);
-			if (has) {
-				updateSub.setText(getString(R.string.update_available, latestVersion));
-			}
+			updateSub.setText(has
+					? getString(R.string.update_available, latestVersion)
+					: getString(R.string.update_check_hint));
 		}
-	}
-
-	private String join(JSONArray a) {
-		StringBuilder b = new StringBuilder();
-		for (int i = 0; i < a.length(); i++) {
-			if (i > 0) {
-				b.append(",  ");
-			}
-			b.append(a.optString(i));
-		}
-		return b.toString();
 	}
 
 	private void service(String action) {
@@ -1048,7 +1084,7 @@ public class MainActivity extends Activity {
 			} catch (Exception e) {
 				ui.post(() -> {
 					toast(getString(R.string.failed, String.valueOf(e.getMessage())));
-					refresh(false);
+					refresh();
 				});
 			}
 		}).start();
@@ -1062,7 +1098,7 @@ public class MainActivity extends Activity {
 				latestVersion = "";
 				ui.post(() -> {
 					toast(getString(R.string.done));
-					refresh(false);
+					refresh();
 				});
 			} catch (Exception e) {
 				ui.post(() -> toast(getString(R.string.failed, String.valueOf(e.getMessage()))));
@@ -1079,7 +1115,7 @@ public class MainActivity extends Activity {
 						try {
 							ui.post(() -> toast(getString(R.string.done)));
 							Api.rollback();
-							ui.post(() -> refresh(false));
+							ui.post(() -> refresh());
 						} catch (Exception e) {
 							ui.post(() -> toast(getString(R.string.failed,
 									String.valueOf(e.getMessage()))));
@@ -1274,10 +1310,29 @@ public class MainActivity extends Activity {
 	 * Sign in hands off to the browser: Tailscale has no headless auth flow, and
 	 * this is the only way to authorise a device.
 	 */
-	/**
-	 * Sign in hands off to the browser: Tailscale has no headless auth flow, and
-	 * this is the only way to authorise a device.
-	 */
+	/** Pull anything Taildrop has received into Downloads/Tailscale. */
+	private void doReceive() {
+		toast(getString(R.string.working));
+		new Thread(() -> {
+			try {
+				final List<String> got = Api.receiveAndExport();
+				ui.post(() -> {
+					if (got.isEmpty()) {
+						toast(getString(R.string.nothing_received));
+					} else {
+						alert()
+								.setTitle(getString(R.string.received_n, got.size()))
+								.setMessage(String.join("\n", got))
+								.setPositiveButton(android.R.string.ok, null)
+								.show();
+					}
+				});
+			} catch (Exception e) {
+				ui.post(() -> toast(getString(R.string.failed, String.valueOf(e.getMessage()))));
+			}
+		}).start();
+	}
+
 	private void doLogin() {
 		toast(getString(R.string.working));
 		new Thread(() -> {
@@ -1297,7 +1352,7 @@ public class MainActivity extends Activity {
 					}
 					if (r.optBoolean("alreadyLoggedIn", false)) {
 						toast(getString(R.string.already_signed_in));
-						refresh(false);
+						refresh();
 						return;
 					}
 					String url = r.optString("url", "");
@@ -1328,7 +1383,7 @@ public class MainActivity extends Activity {
 							Api.logout();
 							ui.post(() -> {
 								toast(getString(R.string.signed_out));
-								refresh(false);
+								refresh();
 							});
 						} catch (Exception e) {
 							ui.post(() -> toast(getString(R.string.failed,

@@ -51,10 +51,6 @@ final class Api {
 			this.exitNode = exitNode;
 		}
 
-		@Override
-		public String toString() {
-			return name + "   " + ip;
-		}
 	}
 
 	/**
@@ -158,32 +154,30 @@ final class Api {
 	 * an ordinary app, even though a file manager can open them. Root can copy
 	 * them somewhere this app owns, which is what the FileProvider then serves.
 	 */
-	static File materialize(android.content.Context ctx, String name, String srcDir)
-			throws Exception {
-		File cacheDir = new File(ctx.getCacheDir(), "open");
-		if (!cacheDir.exists() && !cacheDir.mkdirs()) {
-			throw new IllegalStateException("cannot create " + cacheDir);
-		}
-		String safe = name.replaceAll("[/\\\\]", "_").replace("'", "'\\''");
-		File dest = new File(cacheDir, safe);
 
-		String cmd = "cp -f '" + srcDir + "/" + safe + "' '"
-				+ dest.getAbsolutePath() + "' && chmod 0644 '" + dest.getAbsolutePath() + "'";
-		Root.sh(cmd, 60_000);
-
-		if (!dest.exists() || dest.length() == 0) {
-			throw new IllegalStateException("copy produced nothing for " + name);
-		}
-		return dest;
-	}
-
-	/** Pull anything waiting in the Taildrop inbox into Downloads/Tailscale. */
-	static void receiveAndExport() throws Exception {
+	/**
+	 * Pull anything waiting in the Taildrop inbox into Downloads/Tailscale.
+	 *
+	 * Without this the daemon accepts inbound files and nothing ever shows them:
+	 * they sit in a root-only inbox the user cannot reach. @return the names
+	 * that were exported.
+	 */
+	static List<String> receiveAndExport() throws Exception {
 		call("receive", "0");
-		Root.sh("mkdir -p '/sdcard/Download/Tailscale'; "
+		String out = Root.sh("mkdir -p '/sdcard/Download/Tailscale'; "
 				+ "for f in /data/adb/tailscale/inbox/*; do "
 				+ "  [ -f \"$f\" ] || continue; "
-				+ "  mv -f \"$f\" '/sdcard/Download/Tailscale/' 2>/dev/null; "
-				+ "done; chmod -R 0755 '/sdcard/Download/Tailscale' 2>/dev/null", 120_000);
+				+ "  n=${f##*/}; "
+				+ "  mv -f \"$f\" \"/sdcard/Download/Tailscale/$n\" 2>/dev/null || continue; "
+				+ "  echo \"$n\"; "
+				+ "done; chmod -R 0777 '/sdcard/Download/Tailscale' 2>/dev/null; true",
+				120_000);
+		List<String> got = new ArrayList<>();
+		for (String line : out.split("\n")) {
+			if (!line.trim().isEmpty()) {
+				got.add(line.trim());
+			}
+		}
+		return got;
 	}
 }

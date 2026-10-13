@@ -1,3 +1,65 @@
+## v1.0.3
+
+An audit pass over the app and the module, mostly fixing things that were wrong
+in ways that did not announce themselves.
+
+### The send path lied
+
+- **A shared file could go to the wrong device.** The picker's destination list
+  was stored in a field that was never cleared, so after one picker-based send
+  every later shared file was delivered to whichever device that picker had
+  been opened for -- ignoring the checkboxes the user had just ticked.
+- **"Sent 0 file(s)" was reported as success.** If every file failed to stage,
+  nothing was transferred and no counter recorded the failure, so the run took
+  the all-clear branch. Staging failures are now counted.
+- **The per-device send arrow destroyed the selection.** Its comment said it
+  would not touch it; it cleared the set *and* persisted the result. It now
+  sends to that one device and leaves the selection alone.
+- **The Send button could lie.** Offline peers stayed in the ticked set, so it
+  read "Send to laptop" while there was nothing to send to. The set is now
+  pruned against what is actually online.
+
+### The poll died and never came back
+
+A tick that arrived while a slow `su` call was still running returned early
+*without rescheduling*, ending the poll chain for the rest of the session. The
+header would then freeze until the app was backgrounded and resumed.
+
+### Lifecycle and threading
+
+- No `onDestroy` cleanup existed, so work queued on the UI handler could try to
+  show a dialog on a window that was gone.
+- `onNewIntent` never called `setIntent`, so after any recreation the app read
+  the original launcher intent instead of the share. Staged shares are now saved
+  and restored across rotation and process death.
+- `Root` read an error buffer without the monitor its writer thread appends
+  under, while that thread could still be running.
+
+### Taildrop could receive nothing
+
+The receive path existed but was never reachable from the UI, so inbound files
+sat in a root-only inbox nobody could open. **System → Receive files** now moves
+them into `Downloads/Tailscale` and lists what arrived.
+
+### Smaller things
+
+- "Run tailscaled" followed `backend == "Running"` and so showed an
+  unauthenticated daemon as stopped; it now uses the module's own `daemon` field.
+- `latestVersion` was written on worker threads and read on the UI thread with no
+  synchronisation.
+- The "X is available" sub-label on the update row was unreachable, so the row
+  never showed why it mattered.
+- `<queries>` was missing, so on API 30+ the root-manager button could not see
+  any root manager and silently fell through to Android app settings.
+- Detached views were left reachable after the root gate, letting a late failed
+  write flip a checkbox nobody can see.
+- Removed: the refresh button (dead since the poll), `materialize()`,
+  `Peer.toString()`, `join()`, `daemonSwitch`, `rootError`, the unreachable
+  `refresh(userInitiated)` branch, two unused imports, 16 unused strings, three
+  unused drawables, two unused styles and an unused id. `Peer.exitNode` was
+  parsed and never shown -- it is now.
+- `.gitignore` had duplicate entries.
+
 ## v1.0.2
 
 ### Sign-in did not work, and failed silently

@@ -4,7 +4,27 @@
 	android:versionCode="1"
 	android:versionName="1.0.0">
 
-	<application
+	<!--
+  Package visibility (API 30+). Without this, getLaunchIntentForPackage() returns
+  null for every root manager and the "grant root permission" gate silently
+  falls through to Android app settings, which is not where superuser
+  permission lives.
+-->
+<queries>
+	<package android:name="com.resukisu.resukisu" />
+	<package android:name="me.weishu.kernelsu" />
+	<package android:name="com.topjohnwu.magisk" />
+	<package android:name="me.bmax.apatch" />
+	<package android:name="eu.chainfire.supersu" />
+	<package android:name="com.noshufou.android.su" />
+	<package android:name="com.koushikdutta.supertool" />
+	<intent>
+		<action android:name="android.intent.action.VIEW" />
+		<data android:scheme="https" />
+	</intent>
+</queries>
+
+<application
 		android:label="@string/app_name"
 		android:icon="@drawable/ic_launcher"
 		android:theme="@style/Theme.Share"

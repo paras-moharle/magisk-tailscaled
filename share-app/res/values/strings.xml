@@ -11,12 +11,10 @@
 	<string name="copied">%1$s copied</string>
 
 	<string name="nav_send">Send</string>
-	<string name="nav_devices">Devices</string>
 	<string name="nav_settings">Settings</string>
 	<string name="nav_system">System</string>
 
 	<string name="connected">Connected</string>
-	<string name="offline">Not connected</string>
 	<string name="stopped">Stopped</string>
 	<string name="connecting">Connecting…</string>
 	<string name="sign_in_card_body">Sign in to see your devices and send files to them.</string>
@@ -27,6 +25,7 @@
 	<string name="send_to">Send to %1$s</string>
 	<string name="send_to_n">Send to %1$d devices</string>
 	<string name="send">Send</string>
+	<string name="exit_node_suffix">exit node</string>
 	<string name="choose_devices">Send to</string>
 	<string name="pick_a_device">Pick a device first</string>
 	<string name="no_peers">No devices online. Sign in from the System tab first.</string>
@@ -41,18 +40,14 @@
 	<!-- home -->
 	<string name="this_device">This device</string>
 	<string name="device_name">Device name</string>
-	<string name="ips">Tailscale addresses</string>
 	<string name="relay">Relay</string>
 	<string name="ipv4">IPv4 address</string>
 	<string name="ipv6">IPv6 address</string>
-	<string name="none">None</string>
 	<string name="direct">Direct</string>
 	<string name="console">Open admin console</string>
 	<string name="no_browser">No browser available</string>
 
 	<!-- devices -->
-	<string name="online_peers">Online devices</string>
-	<string name="exit_node_suffix">Exit node</string>
 
 	<!-- settings -->
 	<string name="connectivity">Connectivity</string>
@@ -81,14 +76,11 @@
 
 	<!-- system -->
 	<string name="daemon">Daemon</string>
-	<string name="running">Running</string>
-	<string name="start">Start</string>
 	<string name="stop">Stop</string>
 	<string name="restart">Restart daemon</string>
 	<string name="service">Run tailscaled</string>
 	<string name="service_sub">Start or stop the Tailscale daemon</string>
 	<string name="sign_in">Sign in</string>
-	<string name="sign_in_body">Open the link to authorise this device, then come back.</string>
 	<string name="already_signed_in">Already signed in</string>
 	<string name="account">Account</string>
 	<string name="not_signed_in">Not signed in</string>
@@ -104,6 +96,11 @@
 	<string name="check_updates">Check for updates</string>
 	<string name="install_update">Update to %1$s</string>
 	<string name="update_available">%1$s is available</string>
+	<string name="receive_files">Receive files</string>
+	<string name="receive_files_sub">Move what Taildrop received into Downloads/Tailscale</string>
+	<string name="nothing_received">No files waiting</string>
+	<string name="received_n">Received %1$d file(s)</string>
+	<string name="update_check_hint">Look for a newer tailscaled</string>
 	<string name="rollback">Roll back to previous version</string>
 	<string name="rollback_confirm">Restore the previous tailscaled binary?</string>
 	<string name="logs">Daemon log</string>
@@ -125,9 +122,6 @@
 	<string name="grant_root_title">Grant root\npermission</string>
 	<string name="grant_root_body">TailBridge talks to the tailscaled daemon, which lives in a root-only directory. Your root manager has to be told to trust this app.</string>
 	<string name="grant_root_back">Then come back here \u2014 TailBridge checks again on its own.</string>
-	<string name="root_setup">Grant root permission</string>
-	<string name="root_manager">Open app settings</string>
-	<string name="root_manager_sub">Turn on TailBridge in your root manager, under Superuser</string>
 		<string name="app_settings">App settings</string>
 	<string name="open_root_manager">Open root manager</string>
 </resources>

@@ -1,7 +1,5 @@
+dist/
 build/
-dist/
-tailscale/bin/
-dist/
 tailscale/bin/
 builder/seed-bin/
 share-app/keystore/

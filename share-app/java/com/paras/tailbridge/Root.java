@@ -3,9 +3,6 @@
 
 package com.paras.tailbridge;
 
-import android.content.Context;
-import android.os.Build;
-
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -80,8 +77,10 @@ final class Root {
 		errReader.join(500);
 		p.destroy();
 
-		String text = out.toString().trim();
-		String errors = err.toString().trim();
+		// Snapshot under the same monitor the pumps append under: errReader may
+		// still be running here, and StringBuilder is not thread-safe.
+		String text = snapshot(out).trim();
+		String errors = snapshot(err).trim();
 
 		if (text.isEmpty() && errors.isEmpty()) {
 			throw new Denied("root permission denied");
@@ -91,6 +90,13 @@ final class Root {
 			throw new Denied(errors.isEmpty() ? text : errors);
 		}
 		return text;
+	}
+
+	/** Read a buffer the pump threads may still be appending to. */
+	private static String snapshot(StringBuilder sb) {
+		synchronized (sb) {
+			return sb.toString();
+		}
 	}
 
 	private static Thread pump(final java.io.InputStream in, final StringBuilder sink) {
