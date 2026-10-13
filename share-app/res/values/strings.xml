@@ -18,6 +18,9 @@
 	<string name="connected">Connected</string>
 	<string name="offline">Not connected</string>
 	<string name="stopped">Stopped</string>
+	<string name="connecting">Connecting…</string>
+	<string name="sign_in_card_body">Sign in to see your devices and send files to them.</string>
+	<string name="sign_in_needs_daemon">Start tailscaled first, from the Daemon section below.</string>
 
 	<!-- send -->
 	<string name="send_files">Send files</string>
@@ -119,8 +122,12 @@
 	<string name="need_root_short">Root needed</string>
 	<string name="need_root">TailBridge talks to the tailscaled daemon in the Tailscale module, which lives in a root-only directory, so TailBridge needs root permission.</string>
 	<string name="grant_root">Grant root permission</string>
+	<string name="grant_root_title">Grant root\npermission</string>
+	<string name="grant_root_body">TailBridge talks to the tailscaled daemon, which lives in a root-only directory. Your root manager has to be told to trust this app.</string>
+	<string name="grant_root_back">Then come back here \u2014 TailBridge checks again on its own.</string>
 	<string name="root_setup">Grant root permission</string>
 	<string name="root_manager">Open app settings</string>
 	<string name="root_manager_sub">Turn on TailBridge in your root manager, under Superuser</string>
 		<string name="app_settings">App settings</string>
+	<string name="open_root_manager">Open root manager</string>
 </resources>

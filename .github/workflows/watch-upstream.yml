@@ -1,0 +1,71 @@
+# Watch upstream Tailscale for a release we have not built yet.
+#
+# Why this exists: the phone's updater reads a feed hosted on OUR releases repo
+# (TS_UPDATE_REPO=paras-moharle/tailscale-android-cli). Upstream publishes no
+# static Android binaries, so when Tailscale cuts a release nothing is available
+# for the phone to find until somebody builds it. Without this workflow
+# "auto-update" really means "auto-install once a human builds and publishes",
+# and the phone silently stays behind.
+#
+# Deliberately avoids api.github.com: unauthenticated it allows 60 requests per
+# hour per IP, and both the version check and the feed are reachable through
+# plain /releases/latest redirects with no limit.
+
+name: Watch upstream Tailscale
+
+on:
+  schedule:
+    # Once a day. Upstream ships on its own schedule; there is no reason to
+    # poll faster than the phone does (TS_UPDATE_INTERVAL_HOURS).
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even if this version looks published'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve versions
+        id: v
+        run: |
+          set -euo pipefail
+
+          # Upstream latest: follow the /releases/latest redirect and read the tag.
+          UP_URL=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            https://github.com/tailscale/tailscale/releases/latest)
+          UPSTREAM=${UP_URL##*/}
+          UPSTREAM=${UPSTREAM#v}
+
+          # What we have already published for Android.
+          FEED=https://github.com/paras-moharle/tailscale-android-cli/releases/latest/download/latest.json
+          OURS=$(curl -fsSL "$FEED" 2>/dev/null | jq -r '.version // empty' || true)
+
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "ours=${OURS:-none}" >> "$GITHUB_OUTPUT"
+
+          NEWER=$(printf '%s\n%s\n' "$UPSTREAM" "${OURS:-0.0.0}" | sort -V | tail -1)
+          if [ "$NEWER" = "$UPSTREAM" ] && [ "$UPSTREAM" != "${OURS:-}" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream $UPSTREAM is newer than published ${OURS:-none}."
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Published ${OURS:-none} already matches upstream $UPSTREAM."
+          fi
+
+      - name: Build the missing Android binaries
+        if: steps.v.outputs.needed == 'true' || inputs.force == true
+        run: |
+          set -euo pipefail
+          gh workflow run build-android.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            -f "tag=v${{ steps.v.outputs.upstream }}" \
+            -f publish=true
+          echo "Dispatched build-android.yml for v${{ steps.v.outputs.upstream }}."

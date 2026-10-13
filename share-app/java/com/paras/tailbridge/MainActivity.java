@@ -109,8 +109,6 @@ public class MainActivity extends Activity {
 			navs[i].setOnClickListener(v -> tab(n));
 		}
 
-		findViewById(R.id.refresh).setOnClickListener(v -> refresh(true));
-
 		defaultTargets = getPreferences(0).getString("targets", "");
 		captureShare(getIntent());
 		tab(0);
@@ -291,8 +289,8 @@ public class MainActivity extends Activity {
 
 	/**
 	 * Every read of the daemon goes through `su`, so any failure here means we
-	 * do not have root. Say that in plain words rather than showing a raw shell
-	 * error, which means nothing to the person holding the phone.
+	 * do not have root. That is a gate the user has to act on, not an error to
+	 * read past: it gets the whole screen, centred, with one obvious next step.
 	 */
 	private void renderOffline(String err) {
 		statusView.setText(getString(R.string.need_root_short));
@@ -302,33 +300,126 @@ public class MainActivity extends Activity {
 		pSend.removeAllViews();
 		pSettings.removeAllViews();
 		pSystem.removeAllViews();
+		nameValues.clear();
+		nameShown.clear();
 
-		note(pSend, getString(R.string.need_root));
-		LinearLayout g = group(pSend, getString(R.string.root_setup));
-		action(g, getString(R.string.root_manager), getString(R.string.root_manager_sub),
-				v -> openAppSettings());
+		android.widget.ScrollView sc = findViewById(R.id.scrollSend);
+		sc.setFillViewport(true);
+		pSend.setGravity(Gravity.CENTER);
+		// Nothing behind the gate is reachable, so do not offer it.
+		findViewById(R.id.navBar).setVisibility(View.GONE);
 
-		// The underlying reason, kept small: useful when reporting a problem,
-		// not something to show as the headline.
+		LinearLayout box = new LinearLayout(this);
+		box.setOrientation(LinearLayout.VERTICAL);
+		box.setGravity(Gravity.CENTER_HORIZONTAL);
+
+		ImageView lock = new ImageView(this);
+		lock.setImageResource(R.drawable.ic_lock);
+		lock.setContentDescription(getString(R.string.grant_root));
+		LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(dp(72), dp(72));
+		llp.bottomMargin = dp(28);
+		box.addView(lock, llp);
+
+		TextView title = new TextView(this);
+		title.setText(R.string.grant_root_title);
+		title.setTextColor(getColor(R.color.text));
+		title.setTextSize(26);
+		title.setGravity(Gravity.CENTER);
+		title.setLineSpacing(dp(4), 1f);
+		title.setTypeface(null, android.graphics.Typeface.BOLD);
+		box.addView(title);
+
+		TextView body = new TextView(this);
+		body.setText(R.string.grant_root_body);
+		body.setTextColor(getColor(R.color.text2));
+		body.setTextSize(15);
+		body.setGravity(Gravity.CENTER);
+		body.setLineSpacing(dp(6), 1f);
+		LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		blp.topMargin = dp(16);
+		blp.leftMargin = dp(12);
+		blp.rightMargin = dp(12);
+		box.addView(body, blp);
+
+		TextView open = new TextView(this);
+		open.setText(R.string.open_root_manager);
+		open.setTextColor(getColor(R.color.onAccent));
+		open.setTextSize(16);
+		open.setGravity(Gravity.CENTER);
+		open.setBackgroundResource(R.drawable.btn_primary);
+		open.setPadding(dp(16), dp(16), dp(16), dp(16));
+		open.setClickable(true);
+		open.setOnClickListener(v -> openRootManager());
+		LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		olp.topMargin = dp(28);
+		olp.leftMargin = dp(8);
+		olp.rightMargin = dp(8);
+		box.addView(open, olp);
+
+		TextView back = new TextView(this);
+		back.setText(R.string.grant_root_back);
+		back.setTextColor(getColor(R.color.hint));
+		back.setTextSize(13);
+		back.setGravity(Gravity.CENTER);
+		back.setPadding(dp(16), dp(16), dp(16), dp(0));
+		back.setLineSpacing(dp(3), 1f);
+		box.addView(back);
+
+		// The underlying reason stays at the very bottom and quiet: useful when
+		// reporting a problem, not the thing to show as the headline.
 		if (err != null && !err.isEmpty() && !err.equals(getString(R.string.need_root_short))) {
-			note(pSend, err);
+			TextView why = new TextView(this);
+			why.setText(err);
+			why.setTextColor(getColor(R.color.hint));
+			why.setTextSize(10);
+			why.setGravity(Gravity.CENTER);
+			why.setPadding(dp(20), dp(20), dp(20), dp(20));
+			why.setLineSpacing(dp(2), 1f);
+			box.addView(why);
 		}
+
+		LinearLayout.LayoutParams boxLp = new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		pSend.addView(box, boxLp);
 	}
 
-	/** Paint the header from a status document. @return true when online. */
-	private boolean applyHeader(JSONObject st) {
+	/** The daemon process is alive unless the module reports otherwise. */
+	private static boolean daemonUp(JSONObject st) {
+		return st != null && "running".equals(st.optString("daemon", ""));
+	}
+
+	/** Fully authenticated: the only state where peers are reachable. */
+	private static boolean signedIn(JSONObject st) {
+		return st != null && "Running".equals(st.optString("backend", ""));
+	}
+
+	/** Paint the header from a status document. */
+	private void applyHeader(JSONObject st) {
 		String backend = st.optString("backend", "?");
-		boolean online = "Running".equals(backend);
 		JSONObject self = st.optJSONObject("self");
 		String host = self == null ? "" : self.optString("host", "");
+		boolean up = daemonUp(st);
 
-		statusView.setText(online ? getString(R.string.connected)
-				: "Stopped".equals(backend) ? getString(R.string.stopped) : backend);
-		versionView.setText((host.isEmpty() ? "" : host + "  \u00b7  ") + "tailscaled "
+		// Never show Tailscale's internal enum names like "NeedsLogin".
+		if (signedIn(st)) {
+			statusView.setText(getString(R.string.connected));
+		} else if ("NeedsLogin".equals(backend) || "NeedsMachineAuth".equals(backend)) {
+			statusView.setText(getString(R.string.not_signed_in));
+		} else if (!up) {
+			statusView.setText(getString(R.string.stopped));
+		} else {
+			statusView.setText(getString(R.string.connecting));
+		}
+
+		// "localhost" is what tailscaled calls an unauthenticated node; showing
+		// it looks like a real hostname.
+		boolean showHost = signedIn(st) && !host.isEmpty();
+		versionView.setText((showHost ? host + "  \u00b7  " : "") + "tailscaled "
 				+ st.optString("version", "?"));
 		dotView.getBackground().mutate().setTint(getColor(
-				online ? R.color.ok : ("Stopped".equals(backend) ? R.color.err : R.color.warn)));
-		return online;
+				signedIn(st) ? R.color.ok : up ? R.color.warn : R.color.err));
 	}
 
 	/**
@@ -336,7 +427,7 @@ public class MainActivity extends Activity {
 	 *
 	 * Renaming a device in the admin console is the common case, and waiting for
 	 * a manual refresh made the app look stale. Nothing here rebuilds a panel,
-	 * so the scroll position and any half-finished tap survive.
+	 * so scroll position and any half-finished tap survive.
 	 */
 	private void patchNames(JSONObject st) {
 		JSONObject self = st.optJSONObject("self");
@@ -390,7 +481,10 @@ public class MainActivity extends Activity {
 	}
 
 	private void render(JSONObject st) {
-		boolean online = applyHeader(st);
+		((ScrollView) findViewById(R.id.scrollSend)).setFillViewport(false);
+		pSend.setGravity(Gravity.NO_GRAVITY);
+		findViewById(R.id.navBar).setVisibility(View.VISIBLE);
+		applyHeader(st);
 
 		List<Api.Peer> ps = Api.peersFrom(st);
 		peers.clear();
@@ -398,9 +492,9 @@ public class MainActivity extends Activity {
 			peers.put(p.name, p.ip);
 		}
 
-		buildSend(ps, online);
-		buildSettings(st, online);
-		buildSystem(st, online);
+		buildSend(ps);
+		buildSettings(st);
+		buildSystem(st);
 	}
 
 	// ------------------------------------------------------------------ home
@@ -409,7 +503,7 @@ public class MainActivity extends Activity {
 	 * Home: what this device is, where files go, and the daemon switch. Plain
 	 * grouped rows, the way a system settings screen reads.
 	 */
-	private void buildSend(List<Api.Peer> ps, boolean online) {
+	private void buildSend(List<Api.Peer> ps) {
 		pSend.removeAllViews();
 		nameValues.clear();
 		nameShown.clear();
@@ -424,27 +518,37 @@ public class MainActivity extends Activity {
 			}
 		}
 
+		// Unauthenticated is the most common first-run state, and it is useless
+		// without a clear next step: say so up front rather than leaving an empty
+		// device list to puzzle over.
+		if (!signedIn(status)) {
+			signInCard();
+		}
+
 		JSONObject self = status == null ? null : status.optJSONObject("self");
 
 		// ── this device ──
-		LinearLayout g = group(pSend, getString(R.string.this_device));
-		if (self != null) {
-			TextView nv = value(g, getString(R.string.device_name), self.optString("host", "\u2014"));
+		// While signed out every value here is a placeholder ("localhost", no
+		// addresses), so the card is noise rather than information.
+		if (self != null && signedIn(status)) {
+			LinearLayout g = group(pSend, getString(R.string.this_device));
+			TextView nv = value(g, getString(R.string.device_name),
+					self.optString("host", "\u2014"));
 			nameValues.add(nv);
 			nameShown.add(self.optString("host", "\u2014"));
-		}
-		JSONArray ips = self == null ? null : self.optJSONArray("tailscaleIPs");
-		if (ips != null) {
-			for (int i = 0; i < ips.length(); i++) {
-				// The address is the thing people actually want, so the whole
-				// row copies it and says so.
-				final String ip = ips.optString(i);
-				copyRow(g, i == 0 ? getString(R.string.ipv4) : getString(R.string.ipv6), ip);
+
+			JSONArray ips = self.optJSONArray("tailscaleIPs");
+			if (ips != null) {
+				for (int i = 0; i < ips.length(); i++) {
+					// The address is the thing people actually want, so the
+					// whole row copies it and says so.
+					final String ip = ips.optString(i);
+					copyRow(g, i == 0 ? getString(R.string.ipv4) : getString(R.string.ipv6), ip);
+				}
 			}
-		}
-		if (self != null) {
 			String relay = self.optString("relay", "");
-			value(g, getString(R.string.relay), relay.isEmpty() ? getString(R.string.direct) : relay);
+			value(g, getString(R.string.relay),
+					relay.isEmpty() ? getString(R.string.direct) : relay);
 		}
 
 		// ── send targets ──
@@ -482,12 +586,65 @@ public class MainActivity extends Activity {
 		// ── daemon ──
 		LinearLayout d = group(pSend, getString(R.string.daemon));
 		daemonSwitch = addSwitch(d, getString(R.string.service),
-				getString(R.string.service_sub), online,
+				getString(R.string.service_sub), daemonUp(status),
 				v -> service(v.isChecked() ? "start" : "stop"));
 		action(d, getString(R.string.restart), null, v -> service("restart"));
 		action(d, getString(R.string.console), null, v -> open(CONSOLE_URL));
 
-		updateSendButton(online);
+		updateSendButton();
+	}
+
+	/** Big, obvious, and the only thing that matters before signing in. */
+	private void signInCard() {
+		boolean up = daemonUp(status);
+		LinearLayout card = new LinearLayout(this);
+		card.setOrientation(LinearLayout.VERTICAL);
+		card.setBackgroundResource(R.drawable.group);
+		card.setPadding(dp(20), dp(22), dp(20), dp(20));
+		LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		lp.bottomMargin = dp(8);
+		pSend.addView(card, lp);
+
+		TextView t = new TextView(this);
+		t.setText(R.string.not_signed_in);
+		t.setTextColor(getColor(R.color.text));
+		t.setTextSize(21);
+		t.setTypeface(null, android.graphics.Typeface.BOLD);
+		card.addView(t);
+
+		TextView d = new TextView(this);
+		d.setText(R.string.sign_in_card_body);
+		d.setTextColor(getColor(R.color.text2));
+		d.setTextSize(14);
+		d.setLineSpacing(dp(4), 1f);
+		d.setPadding(0, dp(8), 0, 0);
+		card.addView(d);
+
+		TextView go = new TextView(this);
+		go.setText(R.string.sign_in);
+		go.setTextColor(getColor(R.color.onAccent));
+		go.setTextSize(16);
+		go.setGravity(Gravity.CENTER);
+		go.setTypeface(null, android.graphics.Typeface.BOLD);
+		go.setBackgroundResource(R.drawable.btn_primary);
+		go.setPadding(dp(16), dp(15), dp(16), dp(15));
+		go.setClickable(true);
+		go.setOnClickListener(v -> doLogin());
+		LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+				ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+		glp.topMargin = dp(20);
+		card.addView(go, glp);
+
+		if (!up) {
+			// Signed out AND stopped: the switch on this screen cannot help.
+			TextView hint = new TextView(this);
+			hint.setText(R.string.sign_in_needs_daemon);
+			hint.setTextColor(getColor(R.color.hint));
+			hint.setTextSize(12);
+			hint.setPadding(0, dp(14), 0, 0);
+			card.addView(hint);
+		}
 	}
 
 	private View peerRow(Api.Peer p) {
@@ -602,12 +759,12 @@ public class MainActivity extends Activity {
 		return out;
 	}
 
-	private void updateSendButton(boolean online) {
+	private void updateSendButton() {
 		if (sendBtn == null) {
 			return;
 		}
 		int n = chosen.size();
-		sendBtn.setEnabled(online && n > 0);
+		sendBtn.setEnabled(signedIn(status) && n > 0);
 		if (n == 1) {
 			sendBtn.setText(getString(R.string.send_to, chosen.iterator().next()));
 		} else if (n > 1) {
@@ -705,10 +862,11 @@ public class MainActivity extends Activity {
 
 	// -------------------------------------------------------------- settings
 
-	private void buildSettings(JSONObject st, boolean online) {
+	private void buildSettings(JSONObject st) {
 		pSettings.removeAllViews();
 		switches.clear();
 		Map<String, Boolean> flags = Api.flagsFrom(st);
+		boolean online = daemonUp(st);
 
 		LinearLayout c1 = group(pSettings, getString(R.string.connectivity));
 		addToggle(c1, "accept-dns", getString(R.string.t_accept_dns),
@@ -782,7 +940,7 @@ public class MainActivity extends Activity {
 				ui.post(() -> {
 					toast(label + " " + (isTrue(value) ? "on" : "off"));
 					status = st;
-					buildSettings(st, "Running".equals(st.optString("backend", "")));
+					buildSettings(st);
 				});
 			} catch (Root.Denied e) {
 				ui.post(() -> toast(getString(R.string.need_root_short)));
@@ -806,7 +964,7 @@ public class MainActivity extends Activity {
 
 	// ---------------------------------------------------------------- system
 
-	private void buildSystem(JSONObject st, boolean online) {
+	private void buildSystem(JSONObject st) {
 		pSystem.removeAllViews();
 		updateRow = null;
 		updateTitle = null;
@@ -1116,12 +1274,27 @@ public class MainActivity extends Activity {
 	 * Sign in hands off to the browser: Tailscale has no headless auth flow, and
 	 * this is the only way to authorise a device.
 	 */
+	/**
+	 * Sign in hands off to the browser: Tailscale has no headless auth flow, and
+	 * this is the only way to authorise a device.
+	 */
 	private void doLogin() {
 		toast(getString(R.string.working));
 		new Thread(() -> {
 			try {
 				final JSONObject r = Api.login();
 				ui.post(() -> {
+					if (!r.optBoolean("ok", true)) {
+						// Silent failure is worse than none: say what went wrong.
+						String why = r.optString("raw", "");
+						alert()
+								.setTitle(R.string.sign_in)
+								.setMessage(why.trim().isEmpty()
+										? getString(R.string.no_login_url) : why.trim())
+								.setPositiveButton(android.R.string.ok, null)
+								.show();
+						return;
+					}
 					if (r.optBoolean("alreadyLoggedIn", false)) {
 						toast(getString(R.string.already_signed_in));
 						refresh(false);
@@ -1129,7 +1302,11 @@ public class MainActivity extends Activity {
 					}
 					String url = r.optString("url", "");
 					if (url.isEmpty()) {
-						toast(getString(R.string.no_login_url));
+						alert()
+								.setTitle(R.string.sign_in)
+								.setMessage(r.optString("raw", getString(R.string.no_login_url)).trim())
+								.setPositiveButton(android.R.string.ok, null)
+								.show();
 						return;
 					}
 					open(url);
@@ -1161,6 +1338,36 @@ public class MainActivity extends Activity {
 				})
 				.setNegativeButton(android.R.string.cancel, null)
 				.show();
+	}
+
+	/**
+	 * Superuser permission lives in the root manager, not in Android's app
+	 * settings, so send the user where the switch actually is.
+	 */
+	private void openRootManager() {
+		String[] managers = {
+				"com.resukisu.resukisu",     // ReSuSFS
+				"me.weishu.kernelsu",        // KernelSU
+				"com.topjohnwu.magisk",      // Magisk
+				"me.bmax.apatch",            // APatch
+				"eu.chainfire.supersu",      // SuperSU
+				"com.noshufou.android.su",   // SU
+				"com.koushikdutta.supertool",
+		};
+		for (String pkg : managers) {
+			try {
+				Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+				if (i != null) {
+					i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+					startActivity(i);
+					return;
+				}
+			} catch (Exception ignored) {
+				// try the next one
+			}
+		}
+		// No known manager: fall back rather than dead-ending the user.
+		openAppSettings();
 	}
 
 	private void openAppSettings() {

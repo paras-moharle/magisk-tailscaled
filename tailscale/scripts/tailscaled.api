@@ -304,10 +304,7 @@ api_login() {
 	need_cli
 	_state="$(ts_json status --json | "$JQ" -r '.BackendState // "NoState"')"
 	case "$_state" in
-	NeedsLogin | NoState | Stopped)
-		;;
 	Running | NeedsMachineAuth | Starting)
-		# already authenticated; nothing to do unless forced
 		printf '{"ok":true,"alreadyLoggedIn":true,"url":"","backend":%s}\n' \
 			"$("$JQ" -Rn --arg b "$_state" '$b')"
 		return 0
@@ -315,27 +312,48 @@ api_login() {
 	esac
 
 	_tmp="${TS_RUN_DIR}/login.out"
+	_pidf="${TS_RUN_DIR}/login.pid"
 	: >"$_tmp"
 	chmod 0666 "$_tmp" 2>/dev/null || true
 
-	# tailscale up blocks until the user authorises in a browser, so run it in
-	# the background and scrape the auth URL out of its output.
-	( timeout 300 "$TS_CLI" up >"$_tmp" 2>&1 ) &
-	_up_pid=$!
+	# `tailscale login` blocks until the browser round-trip completes, which can
+	# be minutes, and unlike `tailscale up` it does not touch preferences -- `up`
+	# refuses to run at all when any non-default flag is set, which is exactly
+	# the state a user who has ever changed a setting is in.
+	# minutes. It must NOT be a child of this script: the caller is a transient
+	# `su` session from the app, torn down as soon as it has read our output, and
+	# a login killed at that point never completes -- the app reports success and
+	# the device simply stays signed out.
+	#
+	# nohup inside a detached subshell, so it is reparented to init and outlives
+	# us. The pid is recorded so a retry can tell a pending login from a new one.
+	if [ -f "$_pidf" ] && kill -0 "$(cat "$_pidf" 2>/dev/null)" 2>/dev/null; then
+		: # a login is already waiting for the browser
+	else
+		( nohup timeout 600 "$TS_CLI" login >"$_tmp" 2>&1 & echo $! >"$_pidf" )
+	fi
 
 	_url=""
 	_i=0
-	while [ "$_i" -lt 30 ]; do
+	while [ "$_i" -lt 20 ]; do
 		sleep 1
 		_url="$(grep -oE 'https://login\.tailscale\.com/[a-zA-Z0-9/._?=&-]+' "$_tmp" 2>/dev/null | head -1)"
 		[ -n "$_url" ] && break
-		kill -0 "$_up_pid" 2>/dev/null || break
 		_i=$((_i + 1))
 	done
 
+	_raw="$("$JQ" -Rs '.[-400:]' <"$_tmp" 2>/dev/null || printf '""')"
+	if [ -z "$_url" ]; then
+		# Silent failure is the worst outcome here: the app would report that
+		# sign-in started and then nothing would ever happen.
+		printf '{"ok":false,"error":"no auth URL from tailscale login","raw":%s}\n' "$_raw"
+		rm -f "$_pidf"
+		return 0
+	fi
+
 	printf '{"ok":true,"alreadyLoggedIn":false,"url":%s,"raw":%s}\n' \
-		"$("$JQ" -Rn --arg u "$_url" '$u')" \
-		"$("$JQ" -Rs '.[-400:]' <"$_tmp" 2>/dev/null || printf '""')"
+		"$("$JQ" -Rn --arg u "$_url" '$u')" "$_raw"
+	rm -f "$_pidf"
 }
 
 api_logout() {

@@ -18,6 +18,10 @@ on:
       tag:
         description: 'Upstream Tailscale tag to build (e.g. v1.104.1)'
         required: true
+      publish:
+        description: 'Publish a release the phone updater can find'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -44,6 +48,10 @@ jobs:
             TAG="v${TAG#v}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # The release must be tagged v<version>-android. On a tag push that is
+          # github.ref_name, but on workflow_dispatch ref_name is the BRANCH, so
+          # using it directly published a release named "main".
+          echo "release=$TAG-android" >> "$GITHUB_OUTPUT"
           echo "Building upstream $TAG"
 
       # Fails loudly, on purpose, if upstream refactored something the Android
@@ -53,15 +61,17 @@ jobs:
           TS_UPDATE_REPO: ${{ github.repository }}
         run: ./builder/build-binaries.sh "${{ steps.src.outputs.tag }}"
 
-      - name: Package module zips
-        run: ./.github/tools/build.sh
+      # NOTE: deliberately no module packaging here. Building the module zip
+      # here meant downloading binaries from the very feed this run is about to
+      # publish. Module zips are release.yml's job.
 
       - name: Create release
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.publish == false) }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: tailscaled ${{ github.ref_name }}
-          prerelease: ${{ contains(github.ref_name, '-pre') }}
+          tag_name: ${{ steps.src.outputs.release }}
+          name: tailscaled ${{ steps.src.outputs.tag }} (Android)
+          prerelease: ${{ contains(steps.src.outputs.tag, '-') }}
           generate_release_notes: true
           body: |
             Android build of Tailscale, built from upstream `${{ steps.src.outputs.tag }}`
@@ -77,4 +87,4 @@ jobs:
           files: |
             dist/tailscale_*.tgz
             dist/SHA256SUMS
-            dist/Magisk-Tailscaled-*.zip
+            dist/latest.json

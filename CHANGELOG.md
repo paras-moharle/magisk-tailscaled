@@ -1,3 +1,65 @@
+## v1.0.2
+
+### Sign-in did not work, and failed silently
+
+`tailscaled.api login` ran `tailscale up`. That is the wrong command for
+authentication: `up` changes settings, and it refuses to run at all when the
+node has any non-default flag set -- which is precisely the state anyone who has
+ever touched a setting is in:
+
+```
+Error: changing settings via 'tailscale up' requires mentioning all
+non-default flags. To proceed, either re-run your command with --reset ...
+```
+
+So the URL was never produced, the app had nothing to open, and tapping "Sign
+in" appeared to do nothing. It now uses `tailscale login`, which only
+authenticates and ignores preferences.
+
+Two more things had to be true for it to actually work:
+
+- **The login has to outlive the app's shell session.** `tailscale login` blocks
+  until the browser round-trip finishes. It used to run as a child of the script
+  the app invokes, and the app tears that `su` session down the moment it has
+  read the output -- killing the pending login, so even a correct URL led to a
+  device that silently stayed signed out. It is now detached with `nohup` and
+  reparented to init.
+- **Failure is now reported.** If no URL can be produced, the endpoint returns
+  `ok:false` with the command's own output, and the app shows it instead of
+  reporting a sign-in that never happened.
+
+### The daemon switch disagreed with reality
+
+"Run tailscaled" was driven by `backend == "Running"`, so an unauthenticated or
+starting daemon rendered as *stopped* while it was plainly alive. It now follows
+the module's own `daemon` field. The Send button keeps requiring a signed-in
+node, because that is when peers are actually reachable.
+
+### No more internal names
+
+The header showed Tailscale's raw backend enums -- "NeedsLogin", "NoState".
+Those are now "Not signed in", "Connecting…", "Stopped". The placeholder
+hostname `localhost` is hidden until you are actually signed in.
+
+### Root permission gets a real screen
+
+Missing root was a line of text above an otherwise normal screen. It is now a
+full-screen gate: large lock, the message centred, and one obvious action that
+opens your **root manager** -- Android's app settings is not where superuser
+permission lives, so sending you there was pointless. The nav bar is hidden
+while it is up, because nothing behind it is reachable.
+
+### Uninstalled cleanly
+
+`uninstall.sh` left TailBridge installed: a launcher icon with no daemon behind
+it that could only ever say "grant root permission". Removing the module now
+removes the app too.
+
+### Dropped the refresh button
+
+It was redundant next to the five-second poll, and redundant controls that do
+nothing visible are worse than no control at all.
+
 ## v1.0.1
 
 ### The module is no longer confused with the original
