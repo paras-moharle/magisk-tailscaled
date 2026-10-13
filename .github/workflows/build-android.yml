@@ -97,7 +97,11 @@ jobs:
       - name: Publish the feed pointer
         run: |
           set -euo pipefail
-          cp dist/latest.json tailscale-latest.json
+          # Stamp the publication time so phones can hold a brand-new build back
+          # for TS_UPDATE_SETTLE_HOURS. Stored as an epoch integer, not ISO-8601:
+          # Android's toybox date cannot parse a formatted timestamp.
+          jq --argjson ts "$(date +%s)" '.publishedAtEpoch = $ts' \
+             dist/latest.json > tailscale-latest.json
           if git diff --quiet -- tailscale-latest.json; then
             echo "feed already current"
           else

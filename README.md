@@ -4,7 +4,7 @@ Run Tailscale on a rooted Android phone as a **userspace daemon**, controlled by
 a small native app called **TailBridge**, and keep the binary **current
 automatically**.
 
-[![module](https://img.shields.io/badge/module-v1.0.3-4ea1ff)](module.prop)
+[![module](https://img.shields.io/badge/module-v1.0.4-4ea1ff)](module.prop)
 [![tailscale](https://img.shields.io/badge/tailscale-1.104.1-3ddc84)](https://tailscale.com)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-a78bfa)](LICENSE)
 
@@ -101,6 +101,7 @@ Tune it in `/data/adb/tailscale/settings.sh`:
 ```sh
 TS_UPDATE_AUTO=true              # false disables it entirely
 TS_UPDATE_INTERVAL_HOURS=24      # how often to look
+TS_UPDATE_SETTLE_HOURS=6         # hold a brand-new build this long
 ```
 
 **Nothing is compiled on the phone.** A release here is a prebuilt `arm64`
@@ -112,7 +113,7 @@ restored automatically.
 
 ## Install
 
-1. Download `Magisk-Tailscaled-v1.0.3-full.zip` from
+1. Download `Magisk-Tailscaled-v1.0.4-full.zip` from
    [releases](../../releases) — **prefer this one**. The slim zip is 68 KB and
    downloads the daemon at install time, which needs a working HTTPS-capable
    `wget`; many modern Android builds have none, and that install will fail. The

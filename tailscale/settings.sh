@@ -89,6 +89,18 @@ latest_version() {
 	printf '%s' "$_json" | "${TS_BIN_DIR}/jq" -r '.version // empty' 2>/dev/null
 }
 
+# When the current feed entry was published, as a unix timestamp.
+#
+# An epoch integer rather than ISO-8601 on purpose: Android's toybox date has no
+# `-d`, so parsing a formatted timestamp would fail on the one machine that
+# needs it. An absent or empty field means "settled", so an older feed file can
+# never block updates.
+latest_published_epoch() {
+	_json="$(ts_fetch "$TS_LATEST_URL")" || return 1
+	[ -n "$_json" ] || return 1
+	printf '%s' "$_json" | "${TS_BIN_DIR}/jq" -r '.publishedAtEpoch // empty' 2>/dev/null
+}
+
 # Take the current time
 CURRENT_TIME=$(date +"%I:%M %P")
 
@@ -103,6 +115,13 @@ CURRENT_TIME=$(date +"%I:%M %P")
 export TS_UPDATE_REPO="${TS_UPDATE_REPO:-paras-moharle/magisk-tailscaled}"
 export TS_UPDATE_AUTO="${TS_UPDATE_AUTO:-true}"
 export TS_UPDATE_INTERVAL_HOURS="${TS_UPDATE_INTERVAL_HOURS:-24}"
+
+# A freshly published build is held back for this long before phones are offered
+# it. The check interval is not the risk; the timing is. Without a window, a bad
+# upstream release reaches every phone within minutes of our CI finishing, which
+# is too fast to notice and withdraw. Rollback still protects each device, but
+# it is better not to roll the whole fleet back in the first place.
+export TS_UPDATE_SETTLE_HOURS="${TS_UPDATE_SETTLE_HOURS:-6}"
 
 # Coloring
 normal="\033[0m"

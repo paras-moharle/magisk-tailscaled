@@ -1,3 +1,45 @@
+## v1.0.4
+
+### The auto-updater had never worked
+
+`version_is_newer <a> <b>` returns true when **a** is newer than **b**, but all
+three call sites passed `(installed, published)` and read the result as "an
+update is available" -- the opposite sense. Measured against the real functions:
+
+| feed | correct | before |
+|---|---|---|
+| 1.100 (older than installed 1.104.1) | hold | **update** -- would have downgraded the phone |
+| 1.105, settled | update | **hold** -- would never have installed it |
+| 1.105, fresh | hold | hold |
+| 1.104 (same) | hold | hold |
+
+So the updater would never install a newer build, and would have installed an
+*older* one the moment the feed moved backwards. The "same version" row is the
+only one that looked right, which is why this survived: installed and published
+were equal in every state the module was ever in, so the one test anyone would
+run by hand passes.
+
+The arguments are now the other way round, the contract is spelled out above the
+function, and `up_to_date`, the status line and `check` were all corrected.
+
+### Settling window
+
+A build published minutes ago is not offered for `TS_UPDATE_SETTLE_HOURS`
+(default 6). The check interval was never the risk -- the timing was: without a
+window, a bad upstream release reaches every phone within minutes of CI
+publishing it, which is too fast to notice and withdraw. Rollback still protects
+each device, but the fleet should not have to roll back at all.
+
+The publication time travels in `tailscale-latest.json` as `publishedAtEpoch`, an
+epoch integer rather than ISO-8601, because Android's toybox `date` cannot parse
+a formatted timestamp. A feed with no such field is treated as settled, so an
+older feed file can never block updates.
+
+### Failures are reported now
+
+A failed Android port build files an issue instead of dying in a CI log. See
+v1.0.3.
+
 ## v1.0.3
 
 An audit pass over the app and the module, mostly fixing things that were wrong

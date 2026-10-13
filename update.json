@@ -1,6 +1,6 @@
 {
-  "version": "v1.0.3",
-  "versionCode": "01000003",
-  "zipUrl": "https://github.com/paras-moharle/magisk-tailscaled/releases/download/v1.0.3/Magisk-Tailscaled-v1.0.3-full.zip",
+  "version": "v1.0.4",
+  "versionCode": "01000004",
+  "zipUrl": "https://github.com/paras-moharle/magisk-tailscaled/releases/download/v1.0.4/Magisk-Tailscaled-v1.0.4-full.zip",
   "changelog": "https://raw.githubusercontent.com/paras-moharle/magisk-tailscaled/main/CHANGELOG.md"
 }
