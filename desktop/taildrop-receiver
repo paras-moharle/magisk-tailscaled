@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# taildrop-receiver — pull Taildrop deliveries into a folder, automatically.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 paras-moharle
+#
+# Taildrop is push on the sender and pull on the receiver. `tailscale file cp`
+# puts a file in the peer's inbox and returns; nothing further happens until
+# somebody runs `tailscale file get`. The official GUI clients run that loop for
+# you. A CLI install has no receiver at all, so files land somewhere invisible
+# and the sender is told it worked.
+#
+# This is that missing loop: poll the inbox, move anything new into DEST,
+# notify. `tailscale file get` on an empty inbox returns immediately (~10ms),
+# so the poll costs nothing even at a short interval.
+set -uo pipefail
+
+DEST="${TAILDROP_DEST:-$HOME/Downloads/Tailscale}"
+INTERVAL="${TAILDROP_INTERVAL:-5}"
+CLI="${TAILDROP_CLI:-tailscale}"
+
+log() { printf '%s taildrop-receiver: %s\n' "$(date -Is)" "$*"; }
+
+if ! command -v "$CLI" >/dev/null 2>&1; then
+    log "no '$CLI' on PATH; exiting"
+    exit 127
+fi
+
+mkdir -p "$DEST" || { log "cannot create $DEST"; exit 1; }
+
+# The daemon may not be up yet at boot, so wait for a usable backend rather
+# than spinning against a socket that is not listening.
+for _ in $(seq 1 60); do
+    state="$($CLI status --json 2>/dev/null | grep -o '"BackendState": *"[^"]*"' | cut -d'"' -f4)"
+    case "$state" in
+        Running) break ;;
+        NeedsLogin)
+            log "tailnet needs login; run 'tailscale up' (or open the app)"
+            exit 0
+            ;;
+    esac
+    sleep 2
+done
+
+if [ "${state:-}" != "Running" ]; then
+    log "daemon not ready (state=${state:-unknown}); exiting"
+    exit 1
+fi
+
+log "watching the Taildrop inbox -> $DEST (every ${INTERVAL}s)"
+before="$(find "$DEST" -type f 2>/dev/null | wc -l)"
+
+while :; do
+    if out="$($CLI file get "$DEST" 2>&1)"; then
+        after="$(find "$DEST" -type f 2>/dev/null | wc -l)"
+        if [ "$after" -gt "$before" ]; then
+            n=$((after - before))
+            names="$(find "$DEST" -type f -newermt "-${INTERVAL} seconds" -printf '%f\n' 2>/dev/null | head -10)"
+            log "received $n file(s)"
+            if command -v notify-send >/dev/null 2>&1; then
+                summary="$(printf '%s' "$names" | head -3 | paste -sd', ' -)"
+                [ "$n" -gt 3 ] && summary="$summary, and $((n - 3)) more"
+                notify-send -a "Taildrop" "Received $n file(s)" "$summary — $DEST"
+            fi
+            before="$after"
+        fi
+    else
+        # A daemon restart or a logout looks like this. Do not exit: the whole
+        # point is to still be here next time.
+        log "pull failed: ${out##*: }"
+        sleep $((INTERVAL * 2))
+    fi
+    sleep "$INTERVAL"
+done

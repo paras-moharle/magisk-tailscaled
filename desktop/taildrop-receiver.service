@@ -1,0 +1,18 @@
+[Unit]
+Description=Taildrop receiver (pull Taildrop deliveries into ~/Downloads/Tailscale)
+Documentation=https://github.com/paras-moharle/tailscaled-reborn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/taildrop-receiver
+Restart=on-failure
+RestartSec=10
+
+# Pulling is cheap, but there is nothing to gain from a tight loop when the
+# machine is suspended, and a hung tailscale must not wedge the unit.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
