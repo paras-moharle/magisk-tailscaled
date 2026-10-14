@@ -1,3 +1,9 @@
+## v1.0.8 -- release build verified
+
+The v1.0.6 and v1.0.7 tags predate the feed-repo fix, so their `Build` steps ran
+the old script and 404ed on the daemon binary. This tag is the first built with
+the corrected script, and the first whose zips came from CI rather than by hand.
+
 ## v1.0.7
 
 ### Removed the original author's Telegram group
