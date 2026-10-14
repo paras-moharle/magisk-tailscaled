@@ -126,6 +126,14 @@ drain() {
 		if [ -n "$out" ]; then
 			exported="${exported}${exported:+, }$(basename "$out")"
 			[ -n "$first" ] || first="$out"
+			# Drop the inbox copy once the export is confirmed.
+			#
+			# `tailscale file get` never removes what it copied, so the inbox is
+			# a permanent archive: without this the device accumulates a second
+			# copy of every file it has ever received, forever. Deleting only
+			# after a successful export means a failed copy is retried on the
+			# next cycle instead of being lost.
+			rm -f "$f" 2>/dev/null || true
 		fi
 	done
 
@@ -148,6 +156,28 @@ drain() {
 		fi
 	fi
 	[ "$count" -gt 0 ]
+}
+
+# Consecutive failures. A daemon restart looks like one failure; a genuinely
+# broken CLI looks like several. Quiet for the first, loud after that.
+FAIL_STREAK=0
+
+report_failure() {
+	FAIL_STREAK=$((FAIL_STREAK + 1))
+	log_line "pull failed (${FAIL_STREAK}): ${1:-unknown}"
+	if [ "$FAIL_STREAK" -eq 3 ]; then
+		# Three in a row is not a restart. Tell the user, because otherwise a
+		# dead receiver is indistinguishable from "no files are arriving".
+		cmd notification post -t "Taildrop not receiving" -s "$NOTIFY_CHANNEL" \
+			"tag" "taildrop-error" "Taildrop not receiving" \
+			"Could not reach the daemon: ${1:-unknown}. Received files will not be picked up." \
+			>/dev/null 2>&1
+	fi
+}
+
+report_ok() {
+	[ "$FAIL_STREAK" -gt 0 ] && log_line "recovered after ${FAIL_STREAK} failure(s)"
+	FAIL_STREAK=0
 }
 
 # ---------------------------------------------------------------- singleton --
@@ -192,5 +222,5 @@ while :; do
 	# returns immediately rather than blocking, so relying on it to pace would
 	# spin a core flat.
 	drain
-	sleep "${TS_RECEIVE_INTERVAL:-5}"
+	sleep "${TS_RECEIVE_INTERVAL:-10}"
 done

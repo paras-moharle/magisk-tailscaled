@@ -89,6 +89,10 @@ public class MainActivity extends Activity {
 	private volatile String latestVersion = "";
 
 	private final List<Uri> pendingUris = new ArrayList<>();
+	/** Started from a share sheet rather than the launcher. */
+	private boolean shareLaunch;
+	/** The share-sheet device picker has already been offered this launch. */
+	private boolean pickerShown;
 	/** Destinations of the in-flight picker, handed straight to dispatch. */
 	private final List<String> lastPick = new ArrayList<>();
 	private String defaultTargets = "";
@@ -117,7 +121,13 @@ public class MainActivity extends Activity {
 		refreshBtn.setOnClickListener(v -> manualRefresh());
 
 		defaultTargets = getPreferences(0).getString("targets", "");
-		captureShare(getIntent());
+		android.content.Intent launch = getIntent();
+		if (launch != null && launch.getAction() != null
+				&& (android.content.Intent.ACTION_SEND.equals(launch.getAction())
+					|| android.content.Intent.ACTION_SEND_MULTIPLE.equals(launch.getAction()))) {
+			shareLaunch = true;
+		}
+		captureShare(launch);
 		tab(0);
 		checkRoot();
 		askNotificationPermission();
@@ -174,6 +184,14 @@ public class MainActivity extends Activity {
 		// Without this, getIntent() keeps returning the original MAIN intent and
 		// a later recreation re-reads it instead of the share.
 		setIntent(intent);
+		if (intent != null && intent.getAction() != null
+				&& (android.content.Intent.ACTION_SEND.equals(intent.getAction())
+					|| android.content.Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))) {
+			// A new share is a new decision about the destination, so offer the
+			// picker again rather than leaving the user on a tab.
+			shareLaunch = true;
+			pickerShown = false;
+		}
 		captureShare(intent);
 		tab(0);
 	}
@@ -219,6 +237,20 @@ public class MainActivity extends Activity {
 		String a = in.getAction();
 		if (android.content.Intent.ACTION_SEND.equals(a)) {
 			android.net.Uri u = in.getParcelableExtra(android.content.Intent.EXTRA_STREAM);
+			if (u == null) {
+				// Some senders put the URI in as a plain string. getParcelableExtra
+				// returns null for that, and the share would then look like it
+				// arrived with nothing attached.
+				Object raw = in.getExtras() == null ? null
+						: in.getExtras().get(android.content.Intent.EXTRA_STREAM);
+				if (raw instanceof String && !((String) raw).isEmpty()) {
+					try {
+						u = android.net.Uri.parse((String) raw);
+					} catch (Exception ignored) {
+						u = null;
+					}
+				}
+			}
 			if (u != null) {
 				pendingUris.add(u);
 			} else {
@@ -341,6 +373,203 @@ public class MainActivity extends Activity {
 		refresh();
 	}
 
+	/**
+	 * Launched from the share sheet? Ask where to send, right here.
+	 *
+	 * <p>Previously a share dropped the files on the Send tab and left the user
+	 * to find them, tick a device and press Send. From the share sheet the
+	 * destination is the only thing left to decide, so it is the only thing
+	 * asked.
+	 *
+	 * <p>Shown once per launch. A rotation or a backgrounded resume must not
+	 * re-open a dialog over something the user is already doing.
+	 */
+	private void maybeShowSharePicker() {
+		if (!shareLaunch || pickerShown || pendingUris.isEmpty()) {
+			return;
+		}
+		if (!signedIn(status)) {
+			return; // renderOffline / the sign-in gate has its own message
+		}
+		final List<Api.Peer> ps = Api.peersFrom(status);
+		if (ps.isEmpty()) {
+			return;
+		}
+		pickerShown = true;
+
+		final CharSequence[] labels = new CharSequence[ps.size()];
+		final boolean[] enabled = new boolean[ps.size()];
+		final boolean[] checked = new boolean[ps.size()];
+		for (int i = 0; i < ps.size(); i++) {
+			Api.Peer p = ps.get(i);
+			enabled[i] = p.online;
+			checked[i] = p.online && chosen.contains(p.name);
+			labels[i] = (p.online ? "●  " : "○  ") + p.name
+					+ (p.online ? "" : "  (" + getString(R.string.peer_offline_label) + ")");
+		}
+
+		// Per-row disable needs a ListAdapter whose isEnabled() is consulted by
+		// ListView. setMultiChoiceItems() cannot take a custom adapter, so the
+		// rows are built here: an offline device stays visible but cannot be
+		// ticked, which is the point -- hiding it would make a machine that is
+		// merely down look deleted.
+		final boolean[] picked = checked.clone();
+		// The row click handler below recolours the Send button through this,
+		// rather than installing its own listener on the button -- which would
+		// replace the dialog's and silently break sending.
+		final android.widget.Button[] sendRef = new android.widget.Button[1];
+
+		android.widget.BaseAdapter adapter = new android.widget.BaseAdapter() {
+			@Override
+			public int getCount() {
+				return labels.length;
+			}
+
+			@Override
+			public Object getItem(int i) {
+				return labels[i];
+			}
+
+			@Override
+			public long getItemId(int i) {
+				return i;
+			}
+
+			@Override
+			public boolean isEnabled(int i) {
+				return enabled[i];
+			}
+
+			@Override
+			public android.view.View getView(int i, android.view.View convert,
+					android.view.ViewGroup parent) {
+				android.view.View v = convert;
+				if (v == null) {
+					v = new android.widget.CheckBox(MainActivity.this);
+					android.widget.CheckBox cb = (android.widget.CheckBox) v;
+					cb.setTextColor(getColor(enabled[i] ? R.color.text : R.color.hint));
+					cb.setTextSize(16);
+					cb.setPadding(dp(22), dp(14), dp(22), dp(14));
+					cb.setOnClickListener(x -> {
+						if (!enabled[i]) {
+							return;
+						}
+						cb.setChecked(!cb.isChecked());
+						picked[i] = cb.isChecked();
+						if (sendRef[0] != null) {
+							boolean any = false;
+							for (int k = 0; k < picked.length; k++) {
+								if (picked[k] && enabled[k]) {
+									any = true;
+									break;
+								}
+							}
+							sendRef[0].setTextColor(getColor(
+									any ? R.color.accent : R.color.hint));
+						}
+					});
+					v = cb;
+				}
+				android.widget.CheckBox cb = (android.widget.CheckBox) v;
+				cb.setEnabled(enabled[i]);
+				cb.setAlpha(enabled[i] ? 1f : 0.45f);
+				cb.setText(labels[i]);
+				cb.setChecked(picked[i] && enabled[i]);
+				return v;
+			}
+		};
+
+		android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this)
+				.setTitle(getString(R.string.choose_devices))
+				// The listener is required by the API, but a null one would
+				// dismiss the dialog on the first row tap. No-op keeps it open
+				// so more than one device can be chosen, which is the point of
+				// coming here from a share sheet.
+				.setAdapter(adapter, (d, which) -> { })
+				.setPositiveButton(R.string.send_files, (d, w) -> {
+					chosen.clear();
+					List<String> targets = new ArrayList<>();
+					for (int i = 0; i < ps.size(); i++) {
+						if (picked[i] && enabled[i]) {
+							chosen.add(ps.get(i).name);
+							// dispatch() takes addresses, not names. Passing the
+							// name makes api_send reject it as an invalid peer,
+							// so every share-sheet send failed while the in-app
+							// picker (which passes addresses) worked.
+							if (ps.get(i).ip != null && !ps.get(i).ip.isEmpty()) {
+								targets.add(ps.get(i).ip);
+							}
+						}
+					}
+					saveTargets();
+					refresh();
+					if (targets.isEmpty()) {
+						toast(getString(R.string.pick_a_device));
+						return;
+					}
+					dispatch(new ArrayList<>(pendingUris), targets);
+				})
+				.setNegativeButton(android.R.string.cancel, null)
+				.create();
+
+		dlg.show();
+
+		android.view.Window win = dlg.getWindow();
+		if (win != null) {
+			win.setBackgroundDrawableResource(R.drawable.dialog_bg);
+		}
+
+		// Material upper-cases its buttons; the rest of the app is sentence
+		// case, so a stock dialog reads as foreign in two small ways.
+		android.widget.Button pos = dlg.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+		android.widget.Button neg = dlg.getButton(android.app.AlertDialog.BUTTON_NEGATIVE);
+		if (pos != null) {
+			sendRef[0] = pos;
+			boolean any = false;
+			for (int k = 0; k < picked.length; k++) {
+				if (picked[k] && enabled[k]) {
+					any = true;
+					break;
+				}
+			}
+			pos.setTextColor(getColor(any ? R.color.accent : R.color.hint));
+		}
+
+		for (android.widget.Button b : new android.widget.Button[]{pos, neg}) {
+			if (b != null) {
+				b.setAllCaps(false);
+				b.setTextColor(getColor(R.color.accent));
+				b.setTextSize(15);
+			}
+		}
+
+		// Colour the Send button from the row click handler below, NOT by
+		// installing a listener on the button. setOnClickListener replaces the
+		// one the dialog gave it, and the result was a Send button that
+		// recoloured itself and did nothing else -- the picker looked alive and
+		// silently sent nothing.
+
+		// android.R.id.alertTitle does not exist in the public SDK, so the
+		// title is reached by resource name instead. Absent on some OEM builds,
+		// hence the null check: this is polish, not something worth failing on.
+		android.view.View title = dlg.findViewById(
+				getResources().getIdentifier("alertTitle", "id", "android"));
+		if (title instanceof android.widget.TextView) {
+			android.widget.TextView t = (android.widget.TextView) title;
+			t.setTextColor(getColor(R.color.text));
+			t.setTextSize(19);
+			t.setTypeface(null, android.graphics.Typeface.BOLD);
+		}
+
+		android.widget.ListView lv = dlg.getListView();
+		if (lv != null) {
+			lv.setDivider(new android.graphics.drawable.ColorDrawable(getColor(R.color.divider)));
+			lv.setDividerHeight(dp(1));
+			lv.setSelector(new android.graphics.drawable.ColorDrawable(getColor(R.color.surfaceHi)));
+			lv.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+		}
+	}
+
 	/** One local root round-trip fills every panel; the network check follows. */
 	private void refresh() {
 		new Thread(() -> {
@@ -361,6 +590,10 @@ public class MainActivity extends Activity {
 					renderOffline(fErr);
 				} else {
 					render(fSt);
+					// Arriving from the share sheet should not make the user
+					// navigate to a screen that already has their files waiting
+					// on it. Offer the devices right here instead.
+					maybeShowSharePicker();
 				}
 			});
 

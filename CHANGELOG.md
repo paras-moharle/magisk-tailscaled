@@ -1,5 +1,40 @@
 ## v1.0.10
 
+### Sharing asks where to send, instead of dumping you on a screen
+
+A share dropped the files on the Send tab and left you to find them, tick a
+device and press Send. Coming from the share sheet the destination is the only
+thing left to decide, so it is the only thing asked: a picker appears with the
+devices, their online state, and multi-select.
+
+Three bugs, all of them mine, all of them silent:
+
+- **`dispatch()` takes addresses, not names.** The picker passed peer names, so
+  `api_send` rejected every one as an invalid peer. The in-app picker passed
+  addresses and worked, which is exactly why the two paths disagreed.
+- **The Send button's click listener was overwritten** while adding the
+  "recolour it when something is selected" polish. The button recoloured
+  itself and did nothing else -- the picker looked alive and sent nothing.
+- **A share sent as a string URI** was dropped: `getParcelableExtra` returns
+  null for it. Now parsed as a fallback.
+
+The dialog uses the app's own theme. It was a stock light Material dialog on a
+dark screen, which read as a different app dropped on top of this one.
+
+### The receiver stopped leaking
+
+`tailscale file get` never removes what it copied, so the inbox was a permanent
+archive of every file the device had ever received. The inbox copy is now
+removed once the export to `Downloads/Tailscale` is confirmed; a failed export
+is retried instead. That also halves the storage a delivery costs.
+
+Failures are no longer silent. Three consecutive failed pulls -- a restart
+looks like one, a broken daemon looks like three -- raise a notification
+instead of quietly never arriving again. The poll interval went 5s to 10s,
+which costs nothing for an alert a human reads.
+
+## v1.0.10
+
 ### The notification buttons actually work now, and there is an "Open" too
 
 "Open folder" did nothing. The URI was hand-written as
