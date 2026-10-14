@@ -139,4 +139,7 @@
 	<string name="peer_offline_toast">That device is offline. It cannot receive files right now.</string>
 	<string name="state_no_internet">No internet</string>
 	<string name="state_daemon_stopped">Stopped</string>
+	<string name="taildrop_open_with">Open with</string>
+	<string name="send_no_online">No device online</string>
+	<string name="send_need_signin">Sign in to send</string>
 </resources>

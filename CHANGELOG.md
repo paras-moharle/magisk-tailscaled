@@ -28,8 +28,18 @@ toast, and have nothing delivered. Taildrop reports success on a queued send
 regardless.
 
 Peers now carry `online` through to the UI with a green or red dot. Offline
-peers stay in the list, greyed, with their checkbox and send arrow disabled and
-a tap that explains why. A device that is down should look down, not gone.
+peers stay in the list, greyed, with their checkbox force-unchecked, their send
+arrow disabled and a tap that explains why. `chosen` is pruned against the
+online set on every refresh, so a device that goes down stops being a target by
+itself. The button reads "No device online" rather than being a dead "Send
+files". A device that is down should look down, not gone.
+
+### Refresh button
+
+The header has one. It forces a fresh root round-trip rather than re-rendering
+what is already held, because peer presence, daemon state and the address list
+all change on the device and not in the app. Without it the only way to see a
+device come back was to close and reopen TailBridge.
 
 ### "No internet" is now distinguishable from "signed out"
 

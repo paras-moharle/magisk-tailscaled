@@ -60,6 +60,36 @@ public class ReceiveNotifier extends BroadcastReceiver {
 				"primary:" + rel);
 	}
 
+	/** Pin an intent to the system file manager, to avoid a chooser.
+	 *
+	 * <p>A directory intent with {@code vnd.android.document/directory} resolves
+	 * on a real phone to an APK installer, a code editor <i>and</i> the file
+	 * manager, because those apps claim the type broadly. Tapping the button
+	 * then opens a three-way dialog unrelated to opening a folder, which reads
+	 * as a dead button. Where a file manager can be identified, target it
+	 * directly; otherwise leave the intent implicit and let Android ask.
+	 */
+	private static void pinToFileManager(Context ctx, Intent intent) {
+		try {
+			android.content.pm.PackageManager pm = ctx.getPackageManager();
+			java.util.List<android.content.pm.ResolveInfo> hits =
+					pm.queryIntentActivities(intent, 0);
+			for (android.content.pm.ResolveInfo ri : hits) {
+				String pkg = ri.activityInfo.packageName;
+				if (pkg != null && pkg.contains("documentsui")) {
+					intent.setPackage(pkg);
+					return;
+				}
+			}
+			// No recognisable file manager. Wrap in an explicit chooser so the
+			// tap always produces something the user can see. An unresolved
+			// implicit intent is what makes a notification button look dead.
+			intent.setPackage(null);
+		} catch (Exception ignored) {
+			// Best effort only.
+		}
+	}
+
 	/** Guess a MIME type from the extension. */
 	private static String mimeOf(String name) {
 		if (name == null) {
@@ -129,6 +159,7 @@ public class ReceiveNotifier extends BroadcastReceiver {
 			Intent browse = new Intent(Intent.ACTION_VIEW, dirUri)
 					.setDataAndType(dirUri, DocumentsContract.Document.MIME_TYPE_DIR)
 					.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+			pinToFileManager(ctx, browse);
 			PendingIntent browsePi = PendingIntent.getActivity(ctx, 1, browse,
 					PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 			actions.put("folder", new Notification.Action.Builder(null,
@@ -143,10 +174,15 @@ public class ReceiveNotifier extends BroadcastReceiver {
 			Uri fileUri = docUri(first);
 			if (fileUri != null) {
 				String base = first.substring(first.lastIndexOf('/') + 1);
-				Intent view = new Intent(Intent.ACTION_VIEW, fileUri)
+				Intent fileTarget = new Intent(Intent.ACTION_VIEW, fileUri)
 						.setDataAndType(fileUri, mimeOf(base))
 						.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
 								| Intent.FLAG_ACTIVITY_NEW_TASK);
+				// Wrapped so a tap always surfaces a chooser. An implicit
+				// intent with no handler throws at tap time and the platform
+				// swallows it, which is indistinguishable from a dead button.
+				Intent view = Intent.createChooser(fileTarget,
+						ctx.getString(R.string.taildrop_open_with));
 				PendingIntent viewPi = PendingIntent.getActivity(ctx, 2, view,
 						PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 				actions.put("open", new Notification.Action.Builder(null,

@@ -51,6 +51,19 @@
 				android:textSize="12sp" />
 		</LinearLayout>
 
+		<!-- Manual refresh. Peer presence in particular can change without
+		     anything on screen moving, and the poll interval is long enough
+		     that waiting for it feels like the app is stuck. -->
+		<ImageView
+			android:id="@+id/refresh"
+			android:layout_width="42dp"
+			android:layout_height="42dp"
+			android:padding="11dp"
+			android:layout_gravity="center_vertical"
+			android:src="@drawable/ic_refresh"
+			android:background="?android:attr/selectableItemBackgroundBorderless"
+			android:contentDescription="@string/refresh" />
+
 	</LinearLayout>
 
 	<!-- ── content ─────────────────────────────────────────────── -->

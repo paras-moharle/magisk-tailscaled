@@ -55,8 +55,10 @@ public class MainActivity extends Activity {
 
 	private final Handler ui = new Handler(Looper.getMainLooper());
 
-	/** peer name -> ip for online peers. */
+	/** peer name -> ip, for every known peer, online or not. */
 	private final Map<String, String> peers = new LinkedHashMap<>();
+	/** The subset that is currently reachable. Sending is allowed to these only. */
+	private final Set<String> onlinePeers = new LinkedHashSet<>();
 	/** peers ticked as send targets. */
 	private final Set<String> chosen = new LinkedHashSet<>();
 	/** pref key -> the switch showing it, so a failed write can be undone. */
@@ -110,6 +112,9 @@ public class MainActivity extends Activity {
 			final int n = i;
 			navs[i].setOnClickListener(v -> tab(n));
 		}
+
+		final View refreshBtn = findViewById(R.id.refresh);
+		refreshBtn.setOnClickListener(v -> manualRefresh());
 
 		defaultTargets = getPreferences(0).getString("targets", "");
 		captureShare(getIntent());
@@ -302,6 +307,39 @@ public class MainActivity extends Activity {
 	}
 
 	// ----------------------------------------------------------------- data
+
+	/**
+	 * The refresh button.
+	 *
+	 * <p>Forces a fresh read instead of re-rendering what is already held:
+	 * peer presence, the daemon state and the address list all change on the
+	 * device, not in this process, so only a new root round-trip can see it.
+	 * Restarts the poll chain too, so the next automatic read is a full
+	 * interval away rather than firing immediately on top of this one.
+	 */
+	private void manualRefresh() {
+		View btn = findViewById(R.id.refresh);
+		btn.setEnabled(false);
+		// android.animation.*, not the AndroidX listener: this app has no
+		// AndroidX dependency and must not gain one for a spin.
+		btn.animate().rotationBy(360f).setDuration(520).setListener(
+				new android.animation.AnimatorListenerAdapter() {
+					@Override
+					public void onAnimationEnd(android.animation.Animator a) {
+						btn.setRotation(0f);
+						ui.post(() -> btn.setEnabled(true));
+					}
+
+					@Override
+					public void onAnimationCancel(android.animation.Animator a) {
+						btn.setRotation(0f);
+						ui.post(() -> btn.setEnabled(true));
+					}
+				}).start();
+
+		startPolling();
+		refresh();
+	}
 
 	/** One local root round-trip fills every panel; the network check follows. */
 	private void refresh() {
@@ -578,9 +616,18 @@ public class MainActivity extends Activity {
 
 		List<Api.Peer> ps = Api.peersFrom(st);
 		peers.clear();
+		onlinePeers.clear();
 		for (Api.Peer p : ps) {
 			peers.put(p.name, p.ip);
+			if (p.online) {
+				onlinePeers.add(p.name);
+			}
 		}
+		// A device that went offline while it was ticked must stop being a
+		// target immediately, not on the next manual tap. Taildrop reports a
+		// queued send to an offline peer as successful and delivers nothing,
+		// so leaving it selected turns a red dot into a lie.
+		chosen.retainAll(onlinePeers);
 
 		buildSend(ps);
 		buildSettings(st);
@@ -752,10 +799,13 @@ public class MainActivity extends Activity {
 		row.addView(dot, dotLp);
 
 		CheckBox cb = new CheckBox(this);
-		cb.setChecked(chosen.contains(p.name));
+		// Force-clear an offline peer rather than only disabling it: a ticked
+		// box next to a red dot reads as "this will be sent".
+		cb.setChecked(up && chosen.contains(p.name));
 		cb.setEnabled(up);
+		cb.setAlpha(up ? 1f : 0.4f);
 		cb.setButtonTintList(android.content.res.ColorStateList.valueOf(
-				getColor(chosen.contains(p.name) ? R.color.text : R.color.hint)));
+				getColor(up && chosen.contains(p.name) ? R.color.text : R.color.hint)));
 		row.addView(cb);
 
 		LinearLayout col = col();
@@ -875,15 +925,23 @@ public class MainActivity extends Activity {
 		if (sendBtn == null) {
 			return;
 		}
-		// Drop peers that are no longer online, otherwise the button can read
-		// "Send to laptop" while currentTargets() resolves to nothing.
-		chosen.retainAll(peers.keySet());
+		// Only reachable devices can be targets. An offline peer is pruned from
+		// `chosen` the moment it goes down, so `n` counts live devices only.
+		// No "if nothing is online, allow everything" fallback: that is exactly
+		// backwards, and it lets a fully offline tailnet keep a live send button.
+		chosen.retainAll(onlinePeers);
 		int n = chosen.size();
 		sendBtn.setEnabled(signedIn(status) && n > 0);
 		if (n == 1) {
 			sendBtn.setText(getString(R.string.send_to, chosen.iterator().next()));
 		} else if (n > 1) {
 			sendBtn.setText(getString(R.string.send_to_n, n));
+		} else if (!signedIn(status)) {
+			sendBtn.setText(getString(R.string.send_need_signin));
+		} else if (!peers.isEmpty()) {
+			// Devices exist but none are reachable. Say so, instead of a dead
+			// button labelled "Send files" that looks like a broken app.
+			sendBtn.setText(getString(R.string.send_no_online));
 		} else {
 			sendBtn.setText(getString(R.string.send_files));
 		}
