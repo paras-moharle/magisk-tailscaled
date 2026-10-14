@@ -46,6 +46,14 @@ export TS_RUN_DIR="${TS_DIR}/run"
 export TS_LOG_FILE="${TS_RUN_DIR}/tailscaled.log"
 export TS_RUN_LOG_FILE="${TS_RUN_DIR}/runs.log"
 
+# The tailscale CLI. Defined here rather than only in tailscaled.api so every
+# script that sources settings.sh can reach it -- an undefined TS_CLI expands to
+# nothing and turns "tailscale" into a no-op that silently succeeds.
+export TS_CLI="${TS_BIN_DIR}/tailscale"
+
+# Where Taildrop deliveries are placed so they show up in the Files app.
+export TS_TAILDROP_DIR="${TS_TAILDROP_DIR:-/sdcard/Download/Tailscale}"
+
 # ---------------------------------------------------------------------------
 # CLI symlink
 # ---------------------------------------------------------------------------

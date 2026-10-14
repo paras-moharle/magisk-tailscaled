@@ -125,4 +125,11 @@
 	<string name="grant_root_back">Then come back here \u2014 TailBridge checks again on its own.</string>
 		<string name="app_settings">App settings</string>
 	<string name="open_root_manager">Open root manager</string>
+	<string name="taildrop_channel">Taildrop</string>
+	<string name="taildrop_channel_desc">Files received from your Tailnet</string>
+	<string name="taildrop_open_folder">Open folder</string>
+	<plurals name="taildrop_title">
+		<item quantity="one">Received %d file</item>
+		<item quantity="other">Received %d files</item>
+	</plurals>
 </resources>

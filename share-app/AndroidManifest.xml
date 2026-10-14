@@ -5,6 +5,15 @@
 	android:versionName="1.0.0">
 
 	<!--
+  Taildrop arrival alerts. Android 13 (API 33) made this a runtime permission,
+  and without it NotificationManager.notify() is silently dropped: the
+  broadcast reaches ReceiveNotifier, the process starts, and no alert appears.
+  This app targets 34, so declaring it is not enough on its own; MainActivity
+  also has to ask, which it does on launch.
+-->
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+	<!--
   Package visibility (API 30+). Without this, getLaunchIntentForPackage() returns
   null for every root manager and the "grant root permission" gate silently
   falls through to Android app settings, which is not where superuser
@@ -71,5 +80,20 @@
 				<data android:mimeType="*/*" />
 			</intent-filter>
 		</activity>
+
+		<!-- Taildrop arrival alerts.
+		     exported because the receiver script runs as root, outside the app,
+		     and hands the delivery over an explicit broadcast. Without this the
+		     only alert is `cmd notification post`, which cannot carry a button
+		     and does not survive in the shade.
+		     -->
+		<receiver
+			android:name=".ReceiveNotifier"
+			android:exported="true"
+			android:permission="android.permission.DUMP">
+			<intent-filter>
+				<action android:name="com.paras.tailbridge.RECEIVED" />
+			</intent-filter>
+		</receiver>
 	</application>
 </manifest>

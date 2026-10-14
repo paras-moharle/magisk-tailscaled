@@ -25,7 +25,17 @@ start_inotifyd() {
   inotifyd "tailscaled.inotify" "${TS_MOD_DIR}" >> "/dev/null" 2>&1 &
 }
 
+# Taildrop is push on the sender and pull on the receiver, so nothing arrives
+# on the phone unless something pulls it. Start that alongside the daemon:
+# without it a file sent from a desktop sits in the inbox and the sender is
+# told it worked.
+start_receiver() {
+  tailscaled.receive stop >/dev/null 2>&1
+  tailscaled.receive run >> "/dev/null" 2>&1 &
+}
+
 module_version=$(busybox awk -F'=' '!/^ *#/ && /version=/ { print $2 }' "$TS_MOD_PROP" 2>/dev/null)
 log Info "Magisk Tailscaled version : ${module_version}."
 start_service
 start_inotifyd
+start_receiver

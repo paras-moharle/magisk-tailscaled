@@ -115,6 +115,35 @@ public class MainActivity extends Activity {
 		captureShare(getIntent());
 		tab(0);
 		checkRoot();
+		askNotificationPermission();
+	}
+
+	private static final int REQ_NOTIFY = 4242;
+
+	/**
+	 * Ask for POST_NOTIFICATIONS, which Taildrop alerts depend on.
+	 *
+	 * <p>Asked on every launch until it is answered rather than only once: the
+	 * first prompt is easy to dismiss by accident, and until it is granted
+	 * ReceiveNotifier runs, builds the notification, and has it silently
+	 * dropped by the platform. The receiver cannot ask on the app's behalf --
+	 * a background component has no way to raise a permission dialog -- so the
+	 * only place this can happen is here.
+	 */
+	private void askNotificationPermission() {
+		if (android.os.Build.VERSION.SDK_INT < 33) {
+			return; // granted at install time before Android 13
+		}
+		if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+				== android.content.pm.PackageManager.PERMISSION_GRANTED) {
+			return;
+		}
+		try {
+			requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},
+					REQ_NOTIFY);
+		} catch (Exception ignored) {
+			// Nothing to do: alerts simply stay silent.
+		}
 	}
 
 	/**

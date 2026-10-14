@@ -1,0 +1,192 @@
+#!/system/bin/sh
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 paras-moharle
+#
+# tailscaled.receive — pull Taildrop deliveries onto the phone and notify.
+#
+# Taildrop is push on the sender and pull on the receiver. `tailscale file cp`
+# drops a file into the phone's inbox and returns; unless something pulls it,
+# the sender is told it worked and the file goes nowhere. The app can pull it by
+# hand, but that only helps if the app happens to be open.
+#
+# This runs alongside the daemon and pulls automatically:
+#
+#   file get --wait  blocks until something arrives, so this is event-driven
+#                    rather than a poll. It is also what makes the notification
+#                    timely -- there is no interval to be late by.
+#
+# Deliveries are copied into Downloads/Tailscale so they appear in the Files app,
+# and are notified by name. A second copy is kept in the inbox because tailscale
+# refuses to overwrite: sending the same filename twice must not silently drop
+# the newer file.
+
+DIR=$(dirname "$(realpath "$0")")
+# shellcheck source=../settings.sh
+. "$DIR"/../settings.sh
+
+# settings.sh runs under `set -e`. This is a long-lived loop whose every
+# non-zero exit is ordinary: killing a stale pid, an inbox with nothing in it,
+# a `[ ]` test that is false. Any of those would tear the receiver down and
+# silently stop delivery notification, which is the one thing it exists to do.
+set +e
+
+INBOX="${TS_DIR}/inbox"
+DEST="${TS_TAILDROP_DIR}"
+PIDFILE="${TS_RUN_DIR}/receive.pid"
+NOTIFY_CHANNEL="taildrop"
+
+log_line() {
+	printf '%s [Receive] %s\n' "$(date '+%F %T')" "$1" >> "${TS_RUN_LOG_FILE}"
+}
+
+# Notify by name. `cmd notification` exists on every Android 6+ device and needs
+# no app to be running, which is exactly what a background arrival requires.
+notify() {
+	# $1 = count, $2 = names. Hands the delivery to TailBridge, which can post
+	# a real notification with an "Open folder" button.
+	#
+	# `cmd notification post` was tried first and is not enough: it returns
+	# success but only creates a transient shell channel, so the alert is not in
+	# the shade afterwards and it cannot carry an action at all. An explicit
+	# broadcast to the app's own receiver is the only route to a notification
+	# that survives and can be tapped.
+	count="$1"
+	names="$2"
+	[ "$count" -gt 0 ] || return 0
+	am broadcast \
+		-n "com.paras.tailbridge/.ReceiveNotifier" \
+		-a "com.paras.tailbridge.RECEIVED" \
+		--ei count "$count" \
+		--es names "$names" \
+		--es dir "$DEST" >/dev/null 2>&1
+	if [ $? -ne 0 ]; then
+		# TailBridge absent or refusing. Still tell the user somehow.
+		cmd notification post -t "Taildrop: $count file(s)" \
+			-s "$NOTIFY_CHANNEL" "tag" "taildrop" \
+			"Taildrop: $count file(s)" "$names" >/dev/null 2>&1
+	fi
+}
+
+copy_out() {
+	# $1 = received file. Keep the inbox copy (tailscale will not overwrite an
+	# existing name) and place a readable copy in Downloads.
+	[ -f "$1" ] || return 1
+	name="$(basename "$1")"
+	if mkdir -p "$DEST" 2>/dev/null; then
+		target="${DEST}/${name}"
+		# Never clobber a file the user may have moved or edited.
+		if [ -e "$target" ]; then
+			stem="${name%.*}"
+			ext=""
+			case "$name" in
+				*.*) ext=".${name##*.}" ;;
+			esac
+			n=1
+			while [ -e "${DEST}/${stem}-${n}${ext}" ]; do
+				n=$((n + 1))
+			done
+			target="${DEST}/${stem}-${n}${ext}"
+		fi
+		cp -f "$1" "$target" 2>/dev/null && log_line "exported ${target}"
+		echo "$target"
+	fi
+}
+
+drain() {
+	# `tailscale file get` copies into the inbox and does not remove what it
+	# copied, so the inbox is a growing archive rather than a queue. Snapshot
+	# the names first, then treat only names that were not already present as
+	# new arrivals -- otherwise every poll re-notifies about every file ever
+	# received, which is how a delivery alert becomes noise nobody reads.
+	mkdir -p "$INBOX" 2>/dev/null
+	chmod 0700 "$INBOX" 2>/dev/null
+	before="$(ls -1 "$INBOX" 2>/dev/null)"
+
+	timeout 60 "$TS_CLI" file get "$INBOX" >/dev/null 2>&1
+
+	names=""
+	exported=""
+	count=0
+	for f in "$INBOX"/*; do
+		[ -f "$f" ] || continue
+		base="$(basename "$f")"
+		# Exact-line match against the snapshot taken before the pull. Done
+		# with grep -x rather than a `case` on embedded newlines: that form
+		# did not match under Android's shell, which silently turned every
+		# arrival into "already seen".
+		if [ -n "$before" ] && printf '%s\n' "$before" | grep -Fxq -- "$base"; then
+			continue
+		fi
+		count=$((count + 1))
+		names="${names}${names:+, }$base"
+		out="$(copy_out "$f")"
+		if [ -n "$out" ]; then
+			exported="${exported}${exported:+, }$(basename "$out")"
+		fi
+	done
+
+	if [ "$count" -gt 0 ]; then
+		log_line "received ${count}: ${names}"
+		# `cmd notification post` only creates a transient shell channel: it
+		# returns success but does not survive in the notification shade. So
+		# the durable record is this file, which the app reads and shows the
+		# next time it is opened -- the notification is a best-effort nudge.
+		{
+			printf 'at=%s\n' "$(date +%s)"
+			printf 'count=%s\n' "$count"
+			printf 'names=%s\n' "$names"
+			printf 'dir=%s\n' "$DEST"
+		} > "${TS_RUN_DIR}/last-received" 2>/dev/null || true
+		if [ -n "$exported" ]; then
+			notify "$count" "$exported"
+		else
+			notify "$count" "$names"
+		fi
+	fi
+	[ "$count" -gt 0 ]
+}
+
+# ---------------------------------------------------------------- singleton --
+stop() {
+	if [ -f "$PIDFILE" ]; then
+		kill "$(cat "$PIDFILE")" 2>/dev/null || true
+		rm -f "$PIDFILE" || true
+	fi
+}
+
+case "${1:-run}" in
+stop)
+	stop
+	exit 0
+	;;
+status)
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		echo "receiving: yes (pid $(cat "$PIDFILE"))"
+	else
+		echo "receiving: no"
+	fi
+	exit 0
+	;;
+esac
+
+stop
+mkdir -p "$TS_RUN_DIR"
+echo $$ > "$PIDFILE"
+log_line "receiver started (pid $$, destination ${DEST})"
+
+# Drain whatever piled up while we were not running, before blocking.
+drain
+
+while :; do
+	# drain() does the pulling. It must be the only thing that does: an earlier
+	# version also ran `file get --wait` here, which pulled the file into the
+	# inbox before drain took its snapshot, so drain then classified the brand
+	# new file as already-seen and skipped it. The file arrived and was never
+	# announced.
+	#
+	# The sleep paces the loop. `file get --wait` cannot: on this build it
+	# returns immediately rather than blocking, so relying on it to pace would
+	# spin a core flat.
+	drain
+	sleep "${TS_RECEIVE_INTERVAL:-5}"
+done

@@ -1,3 +1,50 @@
+## v1.0.9
+
+### Files sent from a desktop now arrive by themselves
+
+Taildrop is push on the sender and pull on the receiver. `tailscale file cp`
+drops a file in the phone's inbox and returns; the sender is told it worked and
+the file goes nowhere, because the only thing that could pull it was a button in
+an app that had to already be open. Linux had the mirror-image problem, and
+`desktop/taildrop-receiver` covers that side.
+
+`tailscaled.receive` now runs alongside the daemon: it pulls on an interval,
+copies each delivery into `Downloads/Tailscale` so the Files app sees it, and
+alerts you. Three bugs were found and fixed getting it there, all of them
+silent:
+
+- **`settings.sh` runs under `set -e`**, so killing a stale pid tore the whole
+  script down. Every non-zero exit in a daemon loop is ordinary, so the loop
+  now runs with errexit off.
+- **The drain ran after `file get --wait`.** `--wait` pulled the file into the
+  inbox first, so the snapshot that decides what is new had already seen it and
+  classified every arrival as old. Files arrived and were never announced.
+- **`case` with embedded newlines does not match under Android's shell**, so the
+  same "is this new?" test silently answered yes to everything. Replaced with
+  `grep -Fxq`.
+
+The inbox is also never emptied by `tailscale file get`, so the receiver
+compares against a pre-pull snapshot instead of re-announcing every file ever
+received.
+
+### Arrival alerts, with a button
+
+`cmd notification post` returns success and posts nothing you can act on: it
+creates a transient shell channel that is not in the shade afterwards and cannot
+carry an action at all. So the script hands the delivery to TailBridge over an
+explicit broadcast, and the app posts the real thing -- its own channel, high
+importance, and an **Open folder** action that hands the path to the system file
+manager via the storage documents provider.
+
+One button, not two, on purpose. Opening a specific file needs a `FileProvider`
+and a `file://` URI is not shareable across processes on Android 7+; opening the
+folder needs neither. Same three taps, no manifest plumbing.
+
+`POST_NOTIFICATIONS` is declared and requested on launch. It was missing
+entirely, which is why the first attempt appeared to do nothing: the broadcast
+reached the receiver, the process started, and the platform dropped the
+notification on the floor.
+
 ## v1.0.8 -- release build verified
 
 The v1.0.6 and v1.0.7 tags predate the feed-repo fix, so their `Build` steps ran

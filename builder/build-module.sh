@@ -40,7 +40,8 @@ cp -r "$root/META-INF/com/google/android/." "$stage/META-INF/com/google/android/
 cp "$root/tailscale/settings.sh" "$stage/tailscale/"
 cp "$root/tailscale/scripts/"*.sh "$root/tailscale/scripts/tailscaled.inotify" \
    "$root/tailscale/scripts/tailscaled.service" "$root/tailscale/scripts/tailscaled.api" \
-   "$root/tailscale/scripts/tailscaled.update" "$stage/tailscale/scripts/" 2>/dev/null || \
+   "$root/tailscale/scripts/tailscaled.update" "$root/tailscale/scripts/tailscaled.receive" \
+   "$stage/tailscale/scripts/" 2>/dev/null || \
 cp "$root/tailscale/scripts/"* "$stage/tailscale/scripts/"
 cp "$apk" "$stage/app/TailBridge.apk"
 
