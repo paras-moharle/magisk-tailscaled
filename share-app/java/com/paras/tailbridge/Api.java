@@ -43,12 +43,17 @@ final class Api {
 		final String ip;
 		final String os;
 		final boolean exitNode;
+		/** Reachability. Carried rather than filtered: the list should show a
+		 *  device that is known but down, so it is obvious it is down instead
+		 *  of appearing to have been removed. */
+		final boolean online;
 
-		Peer(String name, String ip, String os, boolean exitNode) {
+		Peer(String name, String ip, String os, boolean exitNode, boolean online) {
 			this.name = name;
 			this.ip = ip;
 			this.os = os;
 			this.exitNode = exitNode;
+			this.online = online;
 		}
 
 	}
@@ -81,7 +86,8 @@ final class Api {
 					p.optString("host", ip.isEmpty() ? "peer" : ip),
 					ip,
 					p.optString("os", ""),
-					p.optBoolean("exitNode", false)));
+					p.optBoolean("exitNode", false),
+					p.optBoolean("online", false)));
 		}
 		return out;
 	}

@@ -485,8 +485,27 @@ public class MainActivity extends Activity {
 		boolean showHost = signedIn(st) && !host.isEmpty();
 		versionView.setText((showHost ? host + "  \u00b7  " : "") + "tailscaled "
 				+ st.optString("version", "?"));
-		dotView.getBackground().mutate().setTint(getColor(
-				signedIn(st) ? R.color.ok : up ? R.color.warn : R.color.err));
+
+		// Three different problems look identical if they share one colour:
+		// the daemon is not running, it is running but signed out, and it is
+		// running and signed in but cannot reach the control plane. The last
+		// one is the confusing one, because the tailnet often still works --
+		// peers on the same network connect directly -- so the device looks
+		// fine while login, relays and DNS quietly do not.
+		boolean controlPlane = self != null && self.optBoolean("online", false);
+		if (!up) {
+			dotView.getBackground().mutate().setTint(getColor(R.color.err));
+			versionView.setText(getString(R.string.state_daemon_stopped) + "  \u00b7  tailscaled "
+					+ st.optString("version", "?"));
+		} else if (!signedIn(st)) {
+			dotView.getBackground().mutate().setTint(getColor(R.color.warn));
+		} else if (!controlPlane) {
+			dotView.getBackground().mutate().setTint(getColor(R.color.warn));
+			versionView.setText(getString(R.string.state_no_internet) + "  \u00b7  tailscaled "
+					+ st.optString("version", "?"));
+		} else {
+			dotView.getBackground().mutate().setTint(getColor(R.color.ok));
+		}
 	}
 
 	/**
@@ -719,9 +738,22 @@ public class MainActivity extends Activity {
 
 	private View peerRow(Api.Peer p) {
 		LinearLayout row = row();
+		final boolean up = p.online;
+
+		// Presence, so an offline device reads as offline rather than as a
+		// device that has silently vanished from the list. The list shows every
+		// known peer; only the online ones can be sent to.
+		ImageView dot = new ImageView(this);
+		dot.setImageResource(R.drawable.dot);
+		dot.setColorFilter(getColor(up ? R.color.ok : R.color.err));
+		dot.setContentDescription(getString(up ? R.string.peer_online : R.string.peer_offline));
+		LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(9), dp(9));
+		dotLp.rightMargin = dp(10);
+		row.addView(dot, dotLp);
 
 		CheckBox cb = new CheckBox(this);
 		cb.setChecked(chosen.contains(p.name));
+		cb.setEnabled(up);
 		cb.setButtonTintList(android.content.res.ColorStateList.valueOf(
 				getColor(chosen.contains(p.name) ? R.color.text : R.color.hint)));
 		row.addView(cb);
@@ -729,14 +761,15 @@ public class MainActivity extends Activity {
 		LinearLayout col = col();
 		TextView n = new TextView(this);
 		n.setText(p.name);
-		n.setTextColor(getColor(R.color.text));
+		n.setTextColor(getColor(up ? R.color.text : R.color.hint));
 		n.setTextSize(15);
 		n.setSingleLine(true);
 		col.addView(n);
 		TextView meta = new TextView(this);
 		meta.setText(p.ip
 				+ (p.os.isEmpty() ? "" : "  ·  " + p.os)
-				+ (p.exitNode ? "  ·  " + getString(R.string.exit_node_suffix) : ""));
+				+ (p.exitNode ? "  ·  " + getString(R.string.exit_node_suffix) : "")
+				+ (up ? "" : "  ·  " + getString(R.string.peer_offline_label)));
 		meta.setTextColor(getColor(R.color.text2));
 		meta.setTextSize(12);
 		col.addView(meta);
@@ -746,11 +779,22 @@ public class MainActivity extends Activity {
 		row.addView(iconButton(R.drawable.ic_copy, R.color.hint, R.string.copy, v -> copy(p.ip)));
 
 		// Send straight to this one device without touching the selection.
-		row.addView(iconButton(R.drawable.ic_send, R.color.text, R.string.send, v ->
-				launchPicker(java.util.Collections.singletonList(p.ip))));
+		// Disabled when the peer is offline: Taildrop would report success and
+		// deliver nothing, which is worse than refusing here.
+		View send = iconButton(R.drawable.ic_send, up ? R.color.text : R.color.hint,
+				R.string.send, v -> launchPicker(java.util.Collections.singletonList(p.ip)));
+		send.setEnabled(up);
+		send.setAlpha(up ? 1f : 0.35f);
+		row.addView(send);
 
 		// Tapping anywhere else on the row is the same as the checkbox.
+		// Offline peers are inert: selecting one would queue a send that
+		// Taildrop reports as successful and never delivers.
 		OnToggle peer = () -> {
+			if (!up) {
+				toast(getString(R.string.peer_offline_toast));
+				return;
+			}
 			if (!chosen.remove(p.name)) {
 				chosen.add(p.name);
 			}

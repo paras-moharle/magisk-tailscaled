@@ -11,6 +11,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.provider.DocumentsContract;
 import android.os.Build;
 
 /**
@@ -32,21 +33,54 @@ public class ReceiveNotifier extends BroadcastReceiver {
 	static final String EXTRA_NAMES = "names";
 	static final String EXTRA_COUNT = "count";
 	static final String EXTRA_DIR = "dir";
+	static final String EXTRA_FIRST = "first";
 
-	/** /sdcard/Download/Tailscale as a SAF document URI.
+	/** A SAF document URI for a path under /sdcard.
 	 *
-	 * A raw file:// URI cannot be handed to another app on Android 7+ (that is
-	 * what FileUriExposedException is about), and this app has no FileProvider.
-	 * The storage documents provider needs no permission and no manifest
-	 * plumbing, which is why the button opens the folder rather than a file.
+	 * <p>A raw file:// URI cannot be handed to another app on Android 7+ (that
+	 * is what FileUriExposedException is about) and this app has no
+	 * FileProvider. The storage documents provider needs neither: it is a
+	 * system provider, so no manifest entry and no permission, and the URI it
+	 * builds is one the Files app already knows how to open.
+	 *
+	 * <p>Hand-rolling the string is what broke this first time. The correct
+	 * form is .../document/<primary%3ADownload%2FTailscale>, which
+	 * DocumentsContract encodes for us; the hand-written variant had no
+	 * /document/ segment and the button silently did nothing.
 	 */
-	private static Uri folderUri(String dir) {
-		if (dir == null || !dir.startsWith("/sdcard/")) {
-			dir = "/sdcard/Download/Tailscale";
+	private static Uri docUri(String path) {
+		if (path == null) {
+			return null;
 		}
-		String rel = dir.substring("/sdcard/".length());
-		return Uri.parse("content://com.android.externalstorage.documents/root/primary/"
-				+ Uri.encode(rel, "/"));
+		String rel = path.startsWith("/sdcard/") ? path.substring("/sdcard/".length()) : null;
+		if (rel == null || rel.isEmpty()) {
+			return null;
+		}
+		return DocumentsContract.buildDocumentUri("com.android.externalstorage.documents",
+				"primary:" + rel);
+	}
+
+	/** Guess a MIME type from the extension. */
+	private static String mimeOf(String name) {
+		if (name == null) {
+			return "*/*";
+		}
+		int dot = name.lastIndexOf('.');
+		String ext = dot > 0 ? name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT) : "";
+		switch (ext) {
+			case "txt": case "log": case "md": return "text/plain";
+			case "json": return "application/json";
+			case "png": return "image/png";
+			case "jpg": case "jpeg": return "image/jpeg";
+			case "gif": return "image/gif";
+			case "webp": return "image/webp";
+			case "pdf": return "application/pdf";
+			case "zip": return "application/zip";
+			case "mp4": return "video/mp4";
+			case "mp3": return "audio/mpeg";
+			case "apk": return "application/vnd.android.package-archive";
+			default: return "*/*";
+		}
 	}
 
 	@Override
@@ -84,11 +118,41 @@ public class ReceiveNotifier extends BroadcastReceiver {
 		PendingIntent openPi = PendingIntent.getActivity(ctx, 0, open,
 				PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-		// The action opens the received folder in the system file manager.
-		Intent browse = new Intent(Intent.ACTION_VIEW, folderUri(dir))
-				.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-		PendingIntent browsePi = PendingIntent.getActivity(ctx, 1, browse,
-				PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+		java.util.Map<String, Notification.Action> actions = new java.util.LinkedHashMap<>();
+
+		// "Open folder" hands the directory to the system file manager.
+		// The directory MIME type matters: without it the intent matches every
+		// app that handles content:// loosely (a browser, a chat app) instead
+		// of the one that can actually show a folder.
+		Uri dirUri = docUri(dir);
+		if (dirUri != null) {
+			Intent browse = new Intent(Intent.ACTION_VIEW, dirUri)
+					.setDataAndType(dirUri, DocumentsContract.Document.MIME_TYPE_DIR)
+					.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+			PendingIntent browsePi = PendingIntent.getActivity(ctx, 1, browse,
+					PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+			actions.put("folder", new Notification.Action.Builder(null,
+					ctx.getString(R.string.taildrop_open_folder), browsePi).build());
+		}
+
+		// "Open" the first file itself, when we know which one it was. Only a
+		// single file: an action per file would push the notification past the
+		// three-action limit and Android would drop the rest.
+		String first = intent.getStringExtra(EXTRA_FIRST);
+		if (first != null && !first.trim().isEmpty()) {
+			Uri fileUri = docUri(first);
+			if (fileUri != null) {
+				String base = first.substring(first.lastIndexOf('/') + 1);
+				Intent view = new Intent(Intent.ACTION_VIEW, fileUri)
+						.setDataAndType(fileUri, mimeOf(base))
+						.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+								| Intent.FLAG_ACTIVITY_NEW_TASK);
+				PendingIntent viewPi = PendingIntent.getActivity(ctx, 2, view,
+						PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+				actions.put("open", new Notification.Action.Builder(null,
+						ctx.getString(R.string.taildrop_open_file), viewPi).build());
+			}
+		}
 
 		String title = ctx.getResources().getQuantityString(R.plurals.taildrop_title, count, count);
 
@@ -98,9 +162,14 @@ public class ReceiveNotifier extends BroadcastReceiver {
 				.setContentText(names)
 				.setStyle(new Notification.BigTextStyle().bigText(names + "\n\n" + dir))
 				.setAutoCancel(true)
-				.setContentIntent(openPi)
-				.addAction(new Notification.Action.Builder(
-						null, ctx.getString(R.string.taildrop_open_folder), browsePi).build());
+				.setContentIntent(openPi);
+		// "Open" before "Open folder": the file is the reason for the alert.
+		if (actions.containsKey("open")) {
+			b.addAction(actions.get("open"));
+		}
+		if (actions.containsKey("folder")) {
+			b.addAction(actions.get("folder"));
+		}
 
 		// Reuse one tag: a second delivery replaces the first rather than
 		// stacking notifications nobody is going to clear.

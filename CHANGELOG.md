@@ -1,3 +1,52 @@
+## v1.0.10
+
+### The notification buttons actually work now, and there is an "Open" too
+
+"Open folder" did nothing. The URI was hand-written as
+`.../root/primary/Download/Tailscale`, but the storage documents provider
+addresses a document as `.../document/primary%3ADownload%2FTailscale`; the
+hand-rolled form has no `/document/` segment and resolves to nothing.
+`DocumentsContract.buildDocumentUri` builds it correctly.
+
+Two more things the URI needed:
+
+- **The MIME type has to be pinned.** Without it the intent matches everything
+  that handles `content://` loosely -- a browser and a chat app came back for a
+  text file. The folder needs `vnd.android.document/directory` or DocumentsUI
+  is not among the candidates at all.
+- **"Open" is a new action**, for the first file received, typed from its
+  extension. One action per file would exceed the three-action limit and the
+  platform would silently drop the rest, so it is a single "Open".
+
+"Open" sits first because the file is the reason for the alert.
+
+### Offline devices are visible, and cannot be selected
+
+The device list showed no presence at all, so an offline machine and a deleted
+one looked identical -- and you could tick an offline device, get a success
+toast, and have nothing delivered. Taildrop reports success on a queued send
+regardless.
+
+Peers now carry `online` through to the UI with a green or red dot. Offline
+peers stay in the list, greyed, with their checkbox and send arrow disabled and
+a tap that explains why. A device that is down should look down, not gone.
+
+### "No internet" is now distinguishable from "signed out"
+
+Both showed an amber dot and said nothing. They are different problems: a
+signed-out device cannot reach anything, while a signed-in device with no
+internet still connects to peers on the same network directly -- it only loses
+login, relays and MagicDNS. The header says which one it is, using the
+daemon's own `Self.Online`.
+
+### On INTERNET permission
+
+Deliberately **not** added. TailBridge opens no sockets: it execs
+`/system/bin/su` and talks to the daemon through that, and tailscaled does its
+own networking outside the app's sandbox. The only permission the app declares
+is `POST_NOTIFICATIONS`. Adding INTERNET would grant a capability it never uses
+and tell users the app phones home, which it does not.
+
 ## v1.0.9
 
 ### Files sent from a desktop now arrive by themselves

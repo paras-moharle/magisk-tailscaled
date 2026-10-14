@@ -52,12 +52,14 @@ notify() {
 	# that survives and can be tapped.
 	count="$1"
 	names="$2"
+	first="${3:-}"
 	[ "$count" -gt 0 ] || return 0
 	am broadcast \
 		-n "com.paras.tailbridge/.ReceiveNotifier" \
 		-a "com.paras.tailbridge.RECEIVED" \
 		--ei count "$count" \
 		--es names "$names" \
+		--es first "$first" \
 		--es dir "$DEST" >/dev/null 2>&1
 	if [ $? -ne 0 ]; then
 		# TailBridge absent or refusing. Still tell the user somehow.
@@ -106,6 +108,7 @@ drain() {
 
 	names=""
 	exported=""
+	first=""
 	count=0
 	for f in "$INBOX"/*; do
 		[ -f "$f" ] || continue
@@ -122,6 +125,7 @@ drain() {
 		out="$(copy_out "$f")"
 		if [ -n "$out" ]; then
 			exported="${exported}${exported:+, }$(basename "$out")"
+			[ -n "$first" ] || first="$out"
 		fi
 	done
 
@@ -138,9 +142,9 @@ drain() {
 			printf 'dir=%s\n' "$DEST"
 		} > "${TS_RUN_DIR}/last-received" 2>/dev/null || true
 		if [ -n "$exported" ]; then
-			notify "$count" "$exported"
+			notify "$count" "$exported" "$first"
 		else
-			notify "$count" "$names"
+			notify "$count" "$names" ""
 		fi
 	fi
 	[ "$count" -gt 0 ]
