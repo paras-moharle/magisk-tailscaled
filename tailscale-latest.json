@@ -1,7 +1,7 @@
 {
   "version": "1.104.1",
   "tag": "v1.104.1-android",
-  "repo": "paras-moharle/tailscale-android-cli",
+  "repo": "paras-moharle/tailscaled-reborn",
   "longVersion": "1.104.1",
   "assets": {
     "arm64": "tailscale_1.104.1_arm64.tgz"
