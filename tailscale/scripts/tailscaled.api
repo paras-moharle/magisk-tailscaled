@@ -195,7 +195,7 @@ api_status() {
 	        rx: (.RxBytes // 0),
 	        tx: (.TxBytes // 0),
 	        lastSeen: (.LastSeen // ""),
-        direct: (.PeerRelay // "") == "" and (.Online // false),
+        direct: ((.PeerRelay // "") == "" and (.Online // false)),
 	        exitNode: (.ExitNodeOption // false),
 	        active: (.Active // false),
 	        tags: arr(.Tags)

@@ -19,6 +19,16 @@ final class Api {
 
 	private Api() {}
 
+	/** Root works, but the module could not be reached. Distinct from no root. */
+	static final class ApiBroken extends Exception {
+		final boolean modulePresent;
+
+		ApiBroken(String msg, boolean modulePresent) {
+			super(msg);
+			this.modulePresent = modulePresent;
+		}
+	}
+
 	private static JSONObject call(String... args) throws Exception {
 		StringBuilder cmd = new StringBuilder(PATH);
 		for (String a : args) {
@@ -26,10 +36,26 @@ final class Api {
 			// space cannot split into two arguments here.
 			cmd.append(" '").append(a.replace("'", "'\\''")).append('\'');
 		}
-		String out = Root.sh(cmd.toString(), 240_000).trim();
+		String out;
+		try {
+			out = Root.sh(cmd.toString(), 240_000).trim();
+		} catch (Root.Denied d) {
+			// Genuinely no root. The caller shows the permission screen.
+			throw d;
+		} catch (Exception e) {
+			throw new ApiBroken("root is available but the module is not installed or "
+					+ "is broken: " + e, false);
+		}
 		int i = out.indexOf('{');
 		if (i < 0) {
-			throw new IllegalStateException("no JSON from api: " + out);
+			// The command ran, so root works. Something else is wrong, and
+			// saying "grant root permission" here sends the user to a setting
+			// that cannot possibly fix it.
+			String why = out.isEmpty() ? "(no output)" : out;
+			if (why.length() > 200) {
+				why = why.substring(0, 200) + "…";
+			}
+			throw new ApiBroken("the module is installed but not answering: " + why, true);
 		}
 		JSONObject o = new JSONObject(out.substring(i));
 		if (!o.optBoolean("ok", false)) {

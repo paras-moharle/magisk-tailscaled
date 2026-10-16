@@ -156,4 +156,6 @@
 	<string name="time_hour">h ago</string>
 	<string name="time_day">d ago</string>
 	<string name="received_while_away">%d file(s) received</string>
+	<string name="module_broken_short">Module not working</string>
+	<string name="module_broken_hint">Root is granted, but the module is not answering. Reflash the module zip.</string>
 </resources>

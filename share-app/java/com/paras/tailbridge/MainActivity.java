@@ -671,9 +671,13 @@ public class MainActivity extends Activity {
 			String err = null;
 			try {
 				st = Api.status();
+			} catch (Api.ApiBroken e) {
+				// Root is fine. Say so, rather than blaming permissions.
+				err = "module: " + e.getMessage();
+			} catch (Root.Denied e) {
+				err = getString(R.string.need_root_short);
 			} catch (Exception e) {
-				err = e instanceof Root.Denied ? getString(R.string.need_root_short)
-						: String.valueOf(e.getMessage());
+				err = "module: " + e.getMessage();
 			}
 
 			final JSONObject fSt = st;
@@ -724,8 +728,16 @@ public class MainActivity extends Activity {
 	 * read past: it gets the whole screen, centred, with one obvious next step.
 	 */
 	private void renderOffline(String err) {
-		statusView.setText(getString(R.string.need_root_short));
-		versionView.setText(getString(R.string.grant_root));
+		// A failure here is not always missing root. If `su` worked and the
+		// module simply could not answer, telling the user to grant permission
+		// sends them to a setting that cannot fix it -- which is exactly what
+		// happened when a broken module reported "grant root permission".
+		boolean noRoot = !(err != null && err.startsWith("module"));
+
+		statusView.setText(getString(noRoot ? R.string.need_root_short
+				: R.string.module_broken_short));
+		versionView.setText(noRoot ? getString(R.string.grant_root)
+				: getString(R.string.module_broken_hint));
 		dotView.getBackground().mutate().setTint(getColor(R.color.warn));
 
 		pSend.removeAllViews();

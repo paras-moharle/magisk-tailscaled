@@ -1,3 +1,33 @@
+## v1.0.15
+
+### A broken status document blamed your root permission
+
+The peer `direct` flag added in v1.0.14 was written as invalid jq:
+
+    direct: (.PeerRelay // "") == "" and (.Online // false),
+
+`and` at that precedence is a syntax error, so jq refused the **entire**
+program. Every status read failed, the app got no JSON, and its error screen
+said **"Grant root permission"** — sending you to a setting that could not
+possibly fix it. Root worked the whole time.
+
+It parses now, and `direct` and `lastSeen` come through with real values.
+
+### The app no longer blames root for everything
+
+There were three ways a read could fail and the app collapsed them into one
+message. They now say different things:
+
+| | |
+|---|---|
+| `su` refused | "Grant root permission" — correct |
+| `su` worked, module absent or broken | "Module not working — reflash the module zip" |
+| `su` worked, module answered with garbage | "Module is installed but not answering" plus what it actually said |
+
+The old behaviour cost an evening of debugging: the app insisted on a permission
+that had already been granted, while the actual fault was a syntax error in a
+shell script.
+
 ## v1.0.14
 
 ### Header sat under the status bar

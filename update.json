@@ -1,6 +1,6 @@
 {
-  "version": "v1.0.14",
-  "versionCode": "01000014",
-  "zipUrl": "https://github.com/paras-moharle/tailscaled-reborn/releases/download/v1.0.14/Tailscaled-Reborn-v1.0.14-full.zip",
+  "version": "v1.0.15",
+  "versionCode": "01000015",
+  "zipUrl": "https://github.com/paras-moharle/tailscaled-reborn/releases/download/v1.0.15/Tailscaled-Reborn-v1.0.15-full.zip",
   "changelog": "https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/CHANGELOG.md"
 }
