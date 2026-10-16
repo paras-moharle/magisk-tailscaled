@@ -203,4 +203,7 @@ endorsed by Tailscale Inc. You are responsible for what you flash onto a device.
 
 ## License
 
-BSD 3-Clause — see [LICENSE](LICENSE).
+**BSD 3-Clause.** See [LICENSE](LICENSE) for this project's terms, and
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the code and binaries the
+flashable zip carries from Tailscale and others — their licences apply to their
+parts, unchanged.

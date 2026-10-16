@@ -35,7 +35,7 @@ apk="$root/share-app/build/TailBridge.apk"
 say "==> staging"
 mkdir -p "$stage/app" "$stage/tailscale/scripts" "$stage/META-INF/com/google/android"
 cp "$root/module.prop" "$root/customize.sh" "$root/service.sh" \
-   "$root/uninstall.sh" "$root/LICENSE" "$stage/"
+   "$root/uninstall.sh" "$root/LICENSE" "$root/THIRD-PARTY-NOTICES.md" "$stage/"
 cp -r "$root/META-INF/com/google/android/." "$stage/META-INF/com/google/android/"
 cp "$root/tailscale/settings.sh" "$stage/tailscale/"
 cp "$root/tailscale/scripts/"*.sh "$root/tailscale/scripts/tailscaled.inotify" \
