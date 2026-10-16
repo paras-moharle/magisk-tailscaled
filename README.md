@@ -3,7 +3,7 @@
 Tailscale on a rooted Android phone, controlled by a small native app, with the
 daemon binary kept up to date automatically.
 
-[![module](https://img.shields.io/badge/module-v1.0.10-4ea1ff)](module.prop)
+[![module](https://img.shields.io/badge/module-v1.0.11-4ea1ff)](module.prop)
 [![tailscale](https://img.shields.io/badge/tailscale-1.104.1-3ddc84)](https://tailscale.com)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-a78bfa)](LICENSE)
 

@@ -76,7 +76,9 @@ copy_out() {
 	name="$(basename "$1")"
 	if mkdir -p "$DEST" 2>/dev/null; then
 		target="${DEST}/${name}"
-		# Never clobber a file the user may have moved or edited.
+		# --conflict=rename already guarantees a free name in the inbox, but the
+		# destination may hold a file the user has since moved or edited. That
+		# one must never be clobbered.
 		if [ -e "$target" ]; then
 			stem="${name%.*}"
 			ext=""
@@ -104,7 +106,7 @@ drain() {
 	chmod 0700 "$INBOX" 2>/dev/null
 	before="$(ls -1 "$INBOX" 2>/dev/null)"
 
-	timeout 60 "$TS_CLI" file get "$INBOX" >/dev/null 2>&1
+	timeout 60 "$TS_CLI" file get --conflict=rename "$INBOX" >/dev/null 2>&1
 
 	names=""
 	exported=""
@@ -218,9 +220,11 @@ while :; do
 	# new file as already-seen and skipped it. The file arrived and was never
 	# announced.
 	#
-	# The sleep paces the loop. `file get --wait` cannot: on this build it
-	# returns immediately rather than blocking, so relying on it to pace would
-	# spin a core flat.
+	# The sleep paces the loop. `file get --wait` was tried as the trigger and
+	# is not one here: measured on this device it blocks, but it does not wake
+	# when a delivery arrives -- a file sent 5s in was still not returned after
+	# 40s, while this poll had already picked it up. So polling is the trigger,
+	# at 2s. An empty poll costs about 10ms.
 	drain
-	sleep "${TS_RECEIVE_INTERVAL:-10}"
+	sleep "${TS_RECEIVE_INTERVAL:-2}"
 done

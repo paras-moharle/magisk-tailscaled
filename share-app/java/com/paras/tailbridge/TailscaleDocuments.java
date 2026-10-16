@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026 paras-moharle
+
+package com.paras.tailbridge;
+
+import android.database.Cursor;
+import android.database.MatrixCursor;
+import android.os.CancellationSignal;
+import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
+import android.provider.DocumentsProvider;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+
+/**
+ * Exposes the Taildrop folder to the system file browser.
+ *
+ * <p>This is what makes "Open folder" actually work.
+ *
+ * <p>A storage document URI cannot be used at all: only an app handed one
+ * through SAF may use one. That is why the first attempt at this button threw
+ * SecurityException and looked like a dead button. Building the provider
+ * ourselves is the only way to hand out a URI we are allowed to grant.
+ *
+ * <p>Scope is one directory -- {@code /sdcard/Download/Tailscale} -- exposed as
+ * a single root. It is not a general file browser: every id is resolved to a
+ * real path inside that one directory, and anything else is rejected.
+ */
+public class TailscaleDocuments extends DocumentsProvider {
+
+	private static final String ROOT_ID = "taildrop-root";
+
+	private static File root() {
+		File downloads = android.os.Environment.getExternalStoragePublicDirectory(
+				android.os.Environment.DIRECTORY_DOWNLOADS);
+		return new File(downloads, "Tailscale");
+	}
+
+	/** Map a document id to a path, refusing anything outside the root. */
+	private File fileFor(String docId) throws FileNotFoundException {
+		if (docId == null || docId.isEmpty()) {
+			return root();
+		}
+		if (ROOT_ID.equals(docId)) {
+			return root();
+		}
+		String name = docId;
+		int slash = name.lastIndexOf('/');
+		if (slash >= 0) {
+			name = name.substring(slash + 1);
+		}
+		if (name.contains("/") || name.contains("..")) {
+			throw new FileNotFoundException("bad id");
+		}
+		File dir = root();
+		File f;
+		try {
+			File canonRoot = dir.getCanonicalFile();
+			f = new File(dir, name).getCanonicalFile();
+			if (!canonRoot.equals(f.getParentFile())) {
+				throw new FileNotFoundException("outside the Taildrop directory");
+			}
+		} catch (java.io.IOException e) {
+			throw new FileNotFoundException("cannot resolve " + docId);
+		}
+		return f;
+	}
+
+	private static String[] cols() {
+		return new String[]{
+				DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+				DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+				DocumentsContract.Document.COLUMN_MIME_TYPE,
+				DocumentsContract.Document.COLUMN_SIZE,
+				DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+		};
+	}
+
+	private void fill(MatrixCursor c, File f, String id) {
+		c.addRow(new Object[]{
+				id,
+				f.getName(),
+				f.isDirectory() ? DocumentsContract.Document.MIME_TYPE_DIR : mimeOf(f.getName()),
+				f.isDirectory() ? null : f.length(),
+				f.lastModified(),
+		});
+	}
+
+	static String mimeOf(String name) {
+		int dot = name.lastIndexOf('.');
+		String ext = dot > 0 ? name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT) : "";
+		switch (ext) {
+			case "txt": case "log": case "md": return "text/plain";
+			case "json": return "application/json";
+			case "csv": return "text/csv";
+			case "png": return "image/png";
+			case "jpg": case "jpeg": return "image/jpeg";
+			case "gif": return "image/gif";
+			case "webp": return "image/webp";
+			case "svg": return "image/svg+xml";
+			case "pdf": return "application/pdf";
+			case "zip": return "application/zip";
+			case "gz": case "tgz": return "application/gzip";
+			case "mp4": return "video/mp4";
+			case "mkv": return "video/x-matroska";
+			case "mp3": return "audio/mpeg";
+			case "wav": return "audio/wav";
+			case "apk": return "application/vnd.android.package-archive";
+			default: return "application/octet-stream";
+		}
+	}
+
+	/**
+	 * The framework's entry point is queryRoots, not queryRootDocuments: the
+	 * older name is deprecated but still called on some OEM builds, so both
+	 * answer the same question.
+	 */
+	@Override
+	public boolean onCreate() {
+		return true;
+	}
+
+	@Override
+	public Cursor queryRoots(String[] projection) {
+		String[] p = projection != null ? projection : new String[]{
+				DocumentsContract.Root.COLUMN_ROOT_ID,
+				DocumentsContract.Root.COLUMN_TITLE,
+				DocumentsContract.Root.COLUMN_SUMMARY,
+				DocumentsContract.Root.COLUMN_ICON,
+		};
+		MatrixCursor c = new MatrixCursor(p, 1);
+		File dir = root();
+		c.addRow(new Object[]{
+				ROOT_ID,
+				dir.getName(),
+				dir.getAbsolutePath(),
+				null,
+		});
+		return c;
+	}
+
+	public Cursor queryRootDocuments(String[] projection, String sortOrder) {
+		MatrixCursor c = new MatrixCursor(projection != null ? projection : cols(), 1);
+		File dir = root();
+		c.addRow(new Object[]{
+				ROOT_ID,
+				dir.getName(),
+				DocumentsContract.Document.MIME_TYPE_DIR,
+				null,
+				dir.lastModified(),
+		});
+		return c;
+	}
+
+	@Override
+	public Cursor queryDocument(String documentId, String[] projection) {
+		MatrixCursor c = new MatrixCursor(projection != null ? projection : cols(), 1);
+		try {
+			File f = fileFor(documentId);
+			fill(c, f, ROOT_ID.equals(documentId) ? ROOT_ID : f.getName());
+		} catch (FileNotFoundException e) {
+			// an unknown id yields an empty cursor rather than crashing
+		}
+		return c;
+	}
+
+	@Override
+	public Cursor queryChildDocuments(String parentDocumentId, String[] projection,
+			String sortOrder) {
+		MatrixCursor c = new MatrixCursor(projection != null ? projection : cols());
+		try {
+			File dir = fileFor(parentDocumentId);
+			if (!dir.isDirectory()) {
+				return c;
+			}
+			File[] kids = dir.listFiles();
+			if (kids == null) {
+				return c;
+			}
+			java.util.Arrays.sort(kids, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+			for (File f : kids) {
+				fill(c, f, f.getName());
+			}
+		} catch (FileNotFoundException ignored) {
+			// empty cursor
+		}
+		return c;
+	}
+
+	@Override
+	public ParcelFileDescriptor openDocument(String documentId, String mode,
+			CancellationSignal signal) throws FileNotFoundException {
+		if (!"r".equals(mode)) {
+			throw new FileNotFoundException("read-only");
+		}
+		File f = fileFor(documentId);
+		if (!f.isFile()) {
+			throw new FileNotFoundException("not a file: " + documentId);
+		}
+		return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
+	}
+
+	@Override
+	public boolean isChildDocument(String parentDocumentId, String documentId) {
+		try {
+			return fileFor(parentDocumentId).isDirectory();
+		} catch (FileNotFoundException e) {
+			return false;
+		}
+	}
+
+	/** The URI that opens this provider's root folder in any file browser. */
+	static android.net.Uri rootUri() {
+		return DocumentsContract.buildDocumentUri(
+				"com.paras.tailbridge.docs", ROOT_ID);
+	}
+}

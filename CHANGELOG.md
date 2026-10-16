@@ -1,3 +1,62 @@
+## v1.0.11
+
+### The notification buttons actually open things
+
+"Open" and "Open folder" both did nothing, and the reason was not a typo. They
+pointed at a storage document URI:
+
+    content://com.android.externalstorage.documents/document/primary%3ADownload%2FTailscale
+
+A document URI may only be used by an app that was *handed* it through SAF
+(ACTION_OPEN_DOCUMENT and friends). `FLAG_GRANT_READ_URI_PERMISSION` cannot
+manufacture that grant for a URI we do not own, so every tap threw:
+
+    SecurityException: UID 10384 does not have permission to
+    content://com.android.externalstorage.documents/document/primary%3ADownload%2FTailscale
+
+Two of my earlier "it works now" claims rested on running the *intent* by hand
+and seeing it resolve. That proved the URI was well-formed. It proved nothing
+about whether a tap had permission, which is a different question, and it is
+the one that was broken.
+
+- **Open** goes through a small read-only `FilesProvider`. We wrote the file, so
+  we own the descriptor and the grant is real. Hand-rolled rather than androidx
+  FileProvider, because this app has no AndroidX and should not gain one to
+  open a text file.
+- **Open folder** goes through a real `DocumentsProvider`, which is what lets a
+  file browser list the folder at all. It uses the standard
+  `vnd.android.document/directory`, not `resource/folder`: the latter is what
+  MiXplorer registers, but MiXplorer cannot browse a DocumentsProvider, so it
+  only offered the folder to an app that would fail. The system file manager is
+  offered instead.
+
+Both providers are scoped to `Download/Tailscale`, canonicalised, and refuse
+anything else.
+
+### Receiving is 5x faster
+
+The poll went 10s to 2s. An empty poll costs about 10ms.
+
+`tailscale file get --wait` is what the Linux receiver blocks on. It was tried
+here as the trigger and is **not** one: measured on this device it blocks, but it
+does not wake when a delivery arrives -- a file sent 5s in was still not returned
+after 40s, while the poll had already picked it up. Polling has to be the
+trigger. Name collisions are now handled by tailscale itself with
+`--conflict=rename`, rather than by a hand-rolled suffix loop.
+
+### The Nautilus extension no longer stalls the file manager
+
+Nautilus calls `get_file_items()` on its main thread, on every selection change.
+The extension was doing two `tailscale status --json` spawns per right-click,
+and -- the real one -- **staging the selection while building the menu, including
+tarring a whole folder**. Compressing a large directory on the UI thread freezes
+Nautilus for as long as it takes. That is almost certainly the freeze you saw.
+
+The menu now does no work at all: a background thread keeps a status snapshot
+warm, the menu reads it (0.01ms), and staging plus sending happen after you
+pick a device, on a worker thread. Every path is wrapped so an error costs a
+missing menu entry rather than the file manager.
+
 ## v1.0.10
 
 ### Sharing asks where to send, instead of dumping you on a screen

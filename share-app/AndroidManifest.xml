@@ -95,5 +95,24 @@
 				<action android:name="com.paras.tailbridge.RECEIVED" />
 			</intent-filter>
 		</receiver>
+		<!-- Serves received files to whatever app opens them. A document URI
+		     cannot be used without a SAF grant, so the notification's Open
+		     action goes through a provider we own instead. grantUriPermissions
+		     is what makes the hand-off legal. -->
+		<provider
+			android:name=".FilesProvider"
+			android:authorities="com.paras.tailbridge.files"
+			android:exported="false"
+			android:grantUriPermissions="true" />
+
+		<!-- Exposes Download/Tailscale to the system file browser, which is
+		     what lets "Open folder" land in Files at that folder. -->
+		<provider
+			android:name=".TailscaleDocuments"
+			android:authorities="com.paras.tailbridge.docs"
+			android:exported="true"
+			android:grantUriPermissions="true"
+			android:permission="android.permission.MANAGE_DOCUMENTS" />
+
 	</application>
 </manifest>
