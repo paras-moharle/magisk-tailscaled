@@ -172,6 +172,12 @@ set_perm_recursive "$TS_SCRIPTS_DIR/" 0 0 0755 0755 "u:object_r:system_file:s0"
 set_perm_recursive "$MODPATH/system/bin/" 0 0 0755 0755 "u:object_r:system_file:s0"
 set_perm "$MODPATH/service.sh" 0 0 0755 "u:object_r:system_file:s0"
 
+# uninstall.sh must be executable or the module manager cannot run it.
+# KernelSU executes it directly rather than through `sh`, so a non-executable
+# uninstall.sh fails with permission denied -- and the module is removed while
+# everything it installed, including the app, stays behind.
+set_perm "$MODPATH/uninstall.sh" 0 0 0755 "u:object_r:system_file:s0"
+
 if [ ! -f "$SERVICE_DIR/tailscaled_service.sh" ]; then
 	# offer to move module scripts to general scripts
 	ui_print "-----------------------------------------------------------"

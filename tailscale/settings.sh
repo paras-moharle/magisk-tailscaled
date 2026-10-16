@@ -92,9 +92,7 @@ ts_fetch() {
 
 # latest_version — newest published Android build, or empty if unreachable.
 latest_version() {
-	_json="$(ts_fetch "$TS_LATEST_URL")" || return 1
-	[ -n "$_json" ] || return 1
-	printf '%s' "$_json" | "${TS_BIN_DIR}/jq" -r '.version // empty' 2>/dev/null
+	feed_field '.version // empty'
 }
 
 # When the current feed entry was published, as a unix timestamp.
@@ -103,10 +101,42 @@ latest_version() {
 # `-d`, so parsing a formatted timestamp would fail on the one machine that
 # needs it. An absent or empty field means "settled", so an older feed file can
 # never block updates.
+# The feed, fetched once per operation.
+#
+# Everything below reads FEED_JSON rather than calling the network again. The
+# decision "is there an update" and the install "fetch this exact release" must
+# be made from the same bytes: two fetches can disagree, and the second can
+# simply fail, which on the device surfaced as an update that was decided on
+# and then not installed.
+FEED_JSON=""
+
+fetch_feed() {
+	[ -n "$FEED_JSON" ] && return 0
+	FEED_JSON="$(ts_fetch "$TS_LATEST_URL" 2>/dev/null || true)"
+	[ -n "$FEED_JSON" ]
+}
+
+feed_field() {
+	fetch_feed || return 1
+	printf '%s' "$FEED_JSON" | "${TS_BIN_DIR}/jq" -r "$1" 2>/dev/null
+}
+
+# The release the feed names, e.g. v1.104.1-android.
+#
+# The tag and the repository are both read from the feed rather than assumed.
+# A repo that publishes both module zips and daemon builds makes
+# /releases/latest ambiguous, which is exactly what broke the installer.
+latest_release_tag() {
+	feed_field '.tag // empty'
+}
+
+# Which repository that release lives in. Absent means this repo.
+latest_repo() {
+	feed_field '.repo // empty'
+}
+
 latest_published_epoch() {
-	_json="$(ts_fetch "$TS_LATEST_URL")" || return 1
-	[ -n "$_json" ] || return 1
-	printf '%s' "$_json" | "${TS_BIN_DIR}/jq" -r '.publishedAtEpoch // empty' 2>/dev/null
+	feed_field '.publishedAtEpoch // empty'
 }
 
 # Take the current time

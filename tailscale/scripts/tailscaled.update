@@ -232,11 +232,20 @@ cmd_run() {
 	log Info "Updating tailscaled (${_cur})..."
 	snapshot
 
-	if ! timeout 300 tailscale update --yes 2>&1 | sed 's/^/    /'; then
-		log Error "Update command failed; keeping ${_cur}."
+	if ! _fetch_new_binary; then
+		log Error "Could not obtain the new binary; keeping ${_cur}."
 		write_state "failed-update"
 		return 1
 	fi
+
+	# Replace it. `cp` onto the running inode is fine on Linux; the daemon is
+	# restarted immediately afterwards either way.
+	if ! cp -f "${dl_work}/tailscaled" "${TS_BIN_DIR}/tailscaled" 2>/dev/null; then
+		log Error "Could not write the new binary; keeping ${_cur}."
+		write_state "failed-update"
+		return 1
+	fi
+	rm -rf "$dl_work"
 
 	# The updater renames over the binary; make sure it is still sane.
 	if [ ! -x "${TS_BIN_DIR}/tailscaled" ]; then
@@ -271,6 +280,96 @@ cmd_run() {
 	write_state "ok-${_new}"
 	# Keep the snapshot: it is now the previous version, which is exactly what
 	# `tailscaled.update rollback` should restore.
+	return 0
+}
+
+
+# ----------------------------------------------------------------- download --
+#
+# `tailscale update --yes` is deliberately not used to install.
+#
+# That command talks to a URL baked into the binary at compile time, pointing
+# at /releases/latest of whichever repository was configured at build time. This
+# repo publishes two kinds of release -- flashable module zips and daemon builds
+# -- so "latest" is whichever was published last, and the daemon build lives in
+# a different repository entirely. It reported success and installed nothing.
+#
+# The feed already names the release and the repository, so we fetch exactly
+# that: a plain HTTPS GET of a release asset, which is a redirect and not a
+# rate-limited API call.
+dl_work="${TS_DIR}/update-dl"
+
+_fetch_new_binary() {
+	# settings.sh and this file run under `set -e`, and every non-zero exit in
+	# this function is ordinary: an unreachable feed, a missing checksum entry,
+	# a `grep` that matched nothing. Any one of them would abort the update
+	# silently, leaving the phone on whatever it had.
+	set +e
+
+	_tag="$(latest_release_tag)"
+	_repo="$(latest_repo)"
+	_ver="$(latest_version)"
+	_arch="$(uname -m)"
+	case "$_arch" in
+	aarch64 | arm64) _arch="arm64" ;;
+	armv7l | arm) _arch="arm" ;;
+	esac
+
+	if [ -z "$_tag" ] || [ -z "$_ver" ]; then
+		log Error "Feed does not name a release to install (tag='${_tag}' version='${_ver}')."
+		return 1
+	fi
+	[ -n "$_repo" ] || _repo="${TS_UPDATE_REPO}"
+
+	_asset="tailscale_${_ver}_${_arch}.tgz"
+	_url="https://github.com/${_repo}/releases/download/${_tag}/${_asset}"
+
+	rm -rf "$dl_work"
+	mkdir -p "$dl_work" || return 1
+	log Info "Downloading ${_asset}"
+
+	if ! ts_fetch "$_url" > "${dl_work}/bin.tgz" 2>/dev/null; then
+		# ts_fetch returns text, so a binary needs the raw path.
+		if ! timeout 300 busybox wget -q -O "${dl_work}/bin.tgz" "$_url"; then
+			log Error "Download failed: ${_url}"
+			return 1
+		fi
+	fi
+
+	[ -s "${dl_work}/bin.tgz" ] || { log Error "Downloaded archive is empty."; return 1; }
+
+	# SHA256SUMS ships beside the assets. Verify before installing anything:
+	# a truncated or corrupted binary that is only discovered after it has
+	# replaced a working daemon is a bad afternoon.
+	_sum_url="https://github.com/${_repo}/releases/download/${_tag}/SHA256SUMS"
+	if timeout 60 busybox wget -q -O "${dl_work}/SHA256SUMS" "$_sum_url" 2>/dev/null; then
+		_want="$(grep " ${_asset}\$" "${dl_work}/SHA256SUMS" 2>/dev/null | head -1 | awk '{print $1}')"
+		if [ -n "$_want" ]; then
+			_got="$(sha256sum "${dl_work}/bin.tgz" 2>/dev/null | awk '{print $1}')"
+			if [ -n "$_got" ] && [ "$_got" != "$_want" ]; then
+				log Error "Checksum mismatch for ${_asset}; refusing to install."
+				return 1
+			fi
+			log Info "Checksum verified."
+		else
+			log Warning "No checksum listed for ${_asset}; installing without verification."
+		fi
+	else
+		log Warning "SHA256SUMS unavailable; installing without verification."
+	fi
+
+	if ! tar -xzf "${dl_work}/bin.tgz" -C "$dl_work" 2>/dev/null; then
+		log Error "Could not extract ${_asset}."
+		return 1
+	fi
+	[ -f "${dl_work}/tailscaled" ] || { log Error "Archive did not contain tailscaled."; return 1; }
+
+	# The daemon must at least be able to run here.
+	chmod 0755 "${dl_work}/tailscaled" 2>/dev/null || true
+	if ! "${dl_work}/tailscaled" --version >/dev/null 2>&1; then
+		log Error "Downloaded tailscaled will not execute on this device."
+		return 1
+	fi
 	return 0
 }
 

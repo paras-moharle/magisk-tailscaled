@@ -80,6 +80,11 @@ unzip -l "$stage/app/TailBridge.apk" | grep -q 'classes.dex' || fail "app APK ha
 
 say "    checks passed"
 
+# Magisk and KernelSU execute uninstall.sh as a program, not through sh, so a
+# non-executable one fails with permission denied: the module is removed and
+# everything it installed -- including the TailBridge app -- stays behind.
+chmod +x "$stage"/*.sh
+
 say "==> zipping"
 mkdir -p "$dist"
 ( cd "$stage" && zip -qr9 "$dist/${name}.zip" . -x '.*' )

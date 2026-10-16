@@ -1,3 +1,47 @@
+## v1.0.13
+
+### The phone installs updates itself now
+
+`tailscale update --yes` is gone from the install path. That command talks to a
+URL baked into the binary at compile time, pointing at `/releases/latest` of
+whichever repo was configured at build time. This repo publishes both flashable
+module zips and daemon builds, so "latest" is whichever came last, and the
+daemon release lives elsewhere entirely. It reported success and installed
+nothing.
+
+The updater now downloads the release the feed names, itself:
+
+- reads `tag` and `repo` from `tailscale-latest.json`
+- fetches `tailscale_<ver>_arm64.tgz` from that repo's release
+- verifies it against `SHA256SUMS` and refuses on mismatch
+- checks the extracted binary actually executes before installing it
+- snapshots, swaps, restarts, health-checks, and rolls back as before
+
+Verified on the device end to end: download, checksum, extract, executable
+check, swap, restart, health check, `rc=0`. The verifier was also seen
+correctly refusing a download whose checksum did not match.
+
+The feed is read **once** per operation. Two fetches could disagree, and the
+second could simply fail -- which showed up as an update that was decided on
+and then not installed.
+
+### The daemon release no longer shows as the module
+
+Republishing the 1.104.1 archive here (the archived repo is read-only, and its
+`SHA256SUMS` did not match the asset it shipped) created a release that GitHub
+put at the top as *Latest* -- so a user landing on Releases would have been
+offered a 9 MB binary instead of the zip to flash. It is marked a pre-release
+now, and the module is Latest again.
+
+### Removing the module removes the app
+
+`uninstall.sh` shipped **without the executable bit**. KernelSU runs it as a
+program rather than through `sh`, so it failed with permission denied: the
+module was removed and TailBridge stayed behind, as an icon leading to a screen
+that could only say "grant root permission".
+
+It is `0755` in the zip now, and `customize.sh` sets it explicitly as well.
+
 ## v1.0.12
 
 ### The desktop extension survives an address change
