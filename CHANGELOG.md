@@ -1,3 +1,19 @@
+## v1.0.12
+
+### The desktop extension survives an address change
+
+A peer's tailnet address moves when it re-registers, and the extension sent to
+whatever address the menu happened to be built with. `tailscale file cp` does
+not fail for a stale address -- it queues the file and prints "sent" -- so the
+transfer was silently lost while the sender was told it worked. Sending again
+appeared to be the fix; it was the only recovery.
+
+Sends resolve the address by device name at send time, and a failure
+re-resolves once and retries before reporting anything.
+
+Measured after: 23ms for the CLI to accept, **404ms** for the file to be on the
+phone.
+
 ## v1.0.11
 
 ### The notification buttons actually open things
