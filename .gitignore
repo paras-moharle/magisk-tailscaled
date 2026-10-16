@@ -3,3 +3,7 @@ build/
 tailscale/bin/
 builder/seed-bin/
 share-app/keystore/
+
+# Python bytecode from local test runs
+__pycache__/
+*.pyc
