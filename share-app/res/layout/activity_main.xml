@@ -5,7 +5,7 @@
 	android:orientation="vertical"
 	android:background="@drawable/bg_app">
 
-	<!-- ── header: one title line, nothing more ─────────────────
+	<!--── header: one title line, nothing more ─────────────────
 	     The top padding here is only a floor. The real status-bar inset is
 	     added at runtime, because a fixed value is either cramped under a
 	     tall status bar or wasteful under a short one, and it is measured
@@ -56,7 +56,7 @@
 				android:textSize="12sp" />
 		</LinearLayout>
 
-		<!-- Manual refresh. Peer presence in particular can change without
+		<!--Manual refresh. Peer presence in particular can change without
 		     anything on screen moving, and the poll interval is long enough
 		     that waiting for it feels like the app is stuck. -->
 		<ImageView
@@ -76,6 +76,20 @@
 		android:layout_width="match_parent"
 		android:layout_height="0dp"
 		android:layout_weight="1">
+
+		<!--Pull-to-refresh indicator. Hidden until a drag starts, and it is
+		     the only thing that tells you the gesture was recognised. Without
+		     it, pulling down just drags the list and feels like nothing. -->
+		<ImageView
+			android:id="@+id/pullSpinner"
+			android:layout_width="26dp"
+			android:layout_height="26dp"
+			android:layout_gravity="top|center_horizontal"
+			android:layout_marginTop="12dp"
+			android:src="@drawable/ic_refresh"
+			android:alpha="0"
+			android:visibility="invisible"
+			android:contentDescription="@string/refresh" />
 
 		<ScrollView
 			android:id="@+id/scrollSend"

@@ -9,6 +9,26 @@
 		<item name="android:windowLightStatusBar">false</item>
 	</style>
 
+	<!-- Share-sheet launch.
+
+	     Sharing a file opened the whole app: a zoom-in transition, the Send tab,
+	     a header, a nav bar, and the device picker floating on top of all it. It
+	     read as being redirected into an app rather than using one.
+
+	     A translucent window is what removes the redirect feeling, because the
+	     system fades it in rather than animating an activity coming forward. The
+	     window is transparent and nothing is painted behind the picker, so the
+	     app you shared from stays on screen behind it. -->
+	<style name="Theme.Share.Popup" parent="@android:style/Theme.Material.Dialog">
+		<item name="android:windowBackground">@android:color/transparent</item>
+		<item name="android:windowIsTranslucent">true</item>
+		<item name="android:windowContentOverlay">@null</item>
+		<item name="android:windowNoTitle">true</item>
+		<item name="android:backgroundDimEnabled">false</item>
+		<item name="android:colorAccent">@color/accent</item>
+		<item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
+	</style>
+
 	<!-- Dialogs use the app's own surface and outline so they do not read as a
 	     different, older dialog dropped on top of a modern screen. -->
 	<style name="Theme.Share.Dialog" parent="@android:style/Theme.Material.Dialog">

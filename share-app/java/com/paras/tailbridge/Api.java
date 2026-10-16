@@ -213,22 +213,4 @@ final class Api {
 	 * they sit in a root-only inbox the user cannot reach. @return the names
 	 * that were exported.
 	 */
-	static List<String> receiveAndExport() throws Exception {
-		call("receive", "0");
-		String out = Root.sh("mkdir -p '/sdcard/Download/Tailscale'; "
-				+ "for f in /data/adb/tailscale/inbox/*; do "
-				+ "  [ -f \"$f\" ] || continue; "
-				+ "  n=${f##*/}; "
-				+ "  mv -f \"$f\" \"/sdcard/Download/Tailscale/$n\" 2>/dev/null || continue; "
-				+ "  echo \"$n\"; "
-				+ "done; chmod -R 0777 '/sdcard/Download/Tailscale' 2>/dev/null; true",
-				120_000);
-		List<String> got = new ArrayList<>();
-		for (String line : out.split("\n")) {
-			if (!line.trim().isEmpty()) {
-				got.add(line.trim());
-			}
-		}
-		return got;
-	}
 }

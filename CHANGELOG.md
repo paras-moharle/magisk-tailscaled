@@ -1,3 +1,96 @@
+## v1.0.16
+
+### Taildrop was not broken. It was landing somewhere nobody looked.
+
+The daemon no longer stages incoming files in a root-only inbox for
+`tailscale file get` to pull. It delivers them straight into
+`Downloads/Taildrop`, and leaves nothing behind to collect.
+
+The receiver was still watching the old inbox, so:
+
+- every send reported success and delivered a file
+- the receiver found an empty inbox and announced nothing
+- the files sat in `Download/Taildrop`, which the app never mentioned
+
+This is why sending looked broken and no notification ever arrived. Not a
+network fault, not a rejected transfer, not the address being stale. The
+receiver was reading a directory the daemon had stopped writing to.
+
+The receiver now sweeps the delivery folder as well as the inbox, so it works
+across the daemon change either way.
+
+### Deliveries that arrived while the receiver was down were never announced
+
+The receiver decided what was new by listing the directory and comparing with
+the previous poll. A file that landed between one poll's sweep and the next
+poll's listing was, on the next poll, simply part of the listing and therefore
+old. Every such delivery was skipped, silently, forever.
+
+Names are now recorded in a list that survives restarts. The first run adopts
+what is already on disk, so installing the module does not announce a backlog,
+but anything arriving later is announced even if the receiver was not running.
+
+### Sharing from another app no longer opens the app
+
+TailBridge is now a **direct share target**: the sheet renders it itself, so
+tapping it puts the device picker over the app you shared from, which stays
+put. Previously the sheet launched an activity, the system animated it forward
+and pushed your app into the background, so even a transparent window felt like
+being taken somewhere.
+
+Direct share needs `android.service.chooser.ChooserTargetService`, which is a
+hidden API absent from the public SDK. The build compiles against declarations
+kept in `share-app/stubs/` and drops them before dexing, with a guard that
+fails the build if one ever reaches the APK. The platform supplies the real
+classes at runtime, so nothing of ours shadows anything of its.
+
+Some skins hide direct share behind a toggle in the share sheet's overflow menu.
+If TailBridge does not appear in the sheet's top row, look for it there.
+
+The activity path still exists as a fallback, and now leaves no trace: out of
+recents, out of the sending app's task, gone the moment it closes.
+
+Sharing a photo put you in TailBridge: a zoom-in transition, the Send tab, a
+header, a nav bar, and the device picker floating on top of all it. It read as
+being redirected into an app rather than using one.
+
+A share launch is now a translucent window with the app's own chrome hidden, so
+the picker appears over whatever you shared from and the system fades it in
+instead of animating an activity opening. Sending returns you to the app you
+came from.
+
+The app itself is now true AMOLED black. The page was `#0C0F13`, a dark
+blue-grey: lit pixels on an OLED panel, and a dark image scrolling past smears.
+
+### `tailscale file cp` exits 0 when it delivers nothing
+
+The exit code was being read as proof of delivery. It is not proof of anything.
+The send path now requires a clean exit *and* no error text before reporting
+success, and names the likely cause when it does fail.
+
+An earlier version of this check went too far and required a `sent` line in the
+output. This daemon prints nothing on success, so that reported every working
+send as a failure. The check can now confirm failure; it cannot confirm
+success, and no longer pretends to.
+
+### Pull to refresh works on every tab
+
+Only the Send tab did anything, and its feedback was a single 360-degree spin
+of the header button. The other two tabs were wired to an empty lambda.
+
+All three tabs now share one indicator: the arrow tracks the finger, rotates
+with the drag, resists past the threshold so it is obvious that letting go will
+commit, and commits on release. Firing the moment the threshold was crossed
+made the list jump out from under your finger.
+
+### Removed
+
+- **Receive files.** The receiver pulls automatically every two seconds, so
+  this button could only ever report "nothing received". It now shows how many
+  deliveries landed and opens the folder.
+- **Peer ping.** Removed. It had to guess at output format, failed often, and
+  nobody wanted it.
+
 ## v1.0.15
 
 ### A broken status document blamed your root permission

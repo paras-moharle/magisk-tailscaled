@@ -99,7 +99,6 @@
 	<string name="update_available">%1$s is available</string>
 	<string name="receive_files">Receive files</string>
 	<string name="receive_files_sub">Move what Taildrop received into Downloads/Tailscale</string>
-	<string name="nothing_received">No files waiting</string>
 	<string name="received_n">Received %1$d file(s)</string>
 	<string name="update_check_hint">Look for a newer tailscaled</string>
 	<string name="rollback">Roll back to previous version</string>
@@ -146,11 +145,6 @@
 	<string name="d_use_exit">Route all traffic through a chosen device</string>
 	<string name="exit_node_none">None</string>
 	<string name="exit_node_set">Exit node: %s</string>
-	<string name="ping_tap">ping</string>
-	<string name="pinging">…</string>
-	<string name="ping_failed">no reply</string>
-	<string name="ping_direct">direct</string>
-	<string name="ping_relay">relayed</string>
 	<string name="time_now">just now</string>
 	<string name="time_min">m ago</string>
 	<string name="time_hour">h ago</string>
@@ -158,4 +152,8 @@
 	<string name="received_while_away">%d file(s) received</string>
 	<string name="module_broken_short">Module not working</string>
 	<string name="module_broken_hint">Root is granted, but the module is not answering. Reflash the module zip.</string>
+	<string name="received_files_row">Received files (%d)</string>
+	<string name="received_files_row_none">Received files</string>
+	<string name="taildrop_folder_sub">Downloads/Tailscale, automatically</string>
+	<string name="share_target_subtitle">Send to a Tailscale device</string>
 </resources>

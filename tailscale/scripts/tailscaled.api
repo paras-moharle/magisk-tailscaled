@@ -407,13 +407,52 @@ api_send() {
 	[ -f "$_path" ] || err "send: no such file: $_path"
 
 	_dest="$(printf '%s:' "$_peer" | sed 's/^\([^:]*\):$/\1:/')"
+
+	# `tailscale file cp` exits 0 even when the transfer never happens. A peer
+	# that cannot receive files -- because the tailnet does not grant the
+	# file-sharing capability -- produces "502 Bad Gateway" and a zero status,
+	# and the UI reported every one of those as a successful send.
+	#
+	# So the exit code is not taken as proof. Success requires positive
+	# confirmation that the CLI claimed the file was sent.
+	set +e
 	_out="$(timeout 300 "$TS_CLI" file cp "$_path" "$_dest" 2>&1)"
 	_rc=$?
+	set -e
+
+	# Absence of output is NOT failure. On this Android build `tailscale file
+	# cp` prints nothing at all on success -- it hands the file to the daemon
+	# and exits 0 -- so requiring a "sent" line reported every working send as
+	# a failure. Only an actual error is treated as failure:
+	#
+	#   - a non-zero exit
+	#   - the CLI saying so in words ("502 Bad Gateway", "unknown target")
+	#
+	# The daemon delivers straight into Downloads and keeps no inbox, so there
+	# is no local receipt that proves arrival. This can confirm failure, never
+	# success, and says so rather than pretending.
+	_failed=no
 	if [ "$_rc" -ne 0 ]; then
+		_failed=yes
+	elif printf '%s' "$_out" | grep -qE 'Bad Gateway|unknown target|not in your Tailnet|error|failed'; then
+		_failed=yes
+	fi
+
+	if [ "$_failed" = "yes" ]; then
+		# Surface whatever the CLI actually said. "502 Bad Gateway" on its own
+		# is a dead end; paired with "unknown target" it points straight at the
+		# peer, and a grants-policy failure is worth naming.
+		_detail="$(printf '%s' "$_out" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+		case "$_detail" in
+		*"Bad Gateway"*|*"unknown target"*|*"not in your Tailnet"*)
+			_detail="$_detail (the tailnet may not grant file-sharing to this device)" ;;
+		esac
+		[ -n "$_detail" ] || _detail="tailscale file cp exited $_rc without sending"
 		printf '{"ok":false,"error":%s}\n' \
-			"$("$JQ" -Rn --arg e "${_out:-send failed}" '$e')"
+			"$("$JQ" -Rn --arg e "$_detail" '$e')"
 		return 0
 	fi
+
 	printf '{"ok":true,"sent":%s,"to":%s}\n' \
 		"$("$JQ" -Rn --arg p "$_path" '$p')" \
 		"$("$JQ" -Rn --arg d "$_dest" '$d')"
@@ -501,10 +540,6 @@ send)
 receive)
 	shift
 	api_receive "$@"
-	;;
-ping)
-	shift
-	api_ping "$@"
 	;;
 received)
 	api_received

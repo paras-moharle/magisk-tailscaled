@@ -32,6 +32,23 @@ set +e
 
 INBOX="${TS_DIR}/inbox"
 DEST="${TS_TAILDROP_DIR}"
+# Where this daemon actually puts received files.
+#
+# `tailscale file get` used to copy deliveries out of a root-only inbox, which
+# is what this receiver watched. It no longer does that: the daemon delivers
+# straight into a per-user Downloads/Taildrop folder and leaves nothing to pull.
+# So the pull below finds an empty inbox while files pile up in a folder nobody
+# was watching -- every send "succeeded", nothing was announced, and the files
+# looked lost. Watch the delivery folder as well as the inbox.
+DROP_DIR="${TS_DROP_DIR:-/sdcard/Download/Taildrop}"
+
+# Names already announced, kept across restarts.
+#
+# Comparing against a per-cycle listing meant anything that arrived while the
+# receiver was not running was, on the next start, simply part of the listing
+# and therefore old -- so it was never announced. A restart silently swallowed
+# every delivery that landed during it. This file is the memory that stops that.
+SEEN_FILE="${TS_RUN_DIR}/seen.list"
 PIDFILE="${TS_RUN_DIR}/receive.pid"
 NOTIFY_CHANNEL="taildrop"
 
@@ -97,47 +114,98 @@ copy_out() {
 }
 
 drain() {
-	# `tailscale file get` copies into the inbox and does not remove what it
-	# copied, so the inbox is a growing archive rather than a queue. Snapshot
-	# the names first, then treat only names that were not already present as
-	# new arrivals -- otherwise every poll re-notifies about every file ever
-	# received, which is how a delivery alert becomes noise nobody reads.
+	# Two places can hold a delivery, and which one is used depends on the
+	# daemon version:
+	#
+	#   INBOX     `tailscale file get` copied deliveries here on older builds.
+	#   DROP_DIR  the daemon delivers here directly on current ones.
+	#
+	# Both are swept so a daemon update cannot silently stop every notification
+	# while sends keep reporting success.
+	#
+	# Neither is a queue: the pull does not remove what it copied, and the
+	# daemon leaves what it delivered. So each directory is snapshotted first and
+	# only names that were not already present count as new arrivals --
+	# otherwise every poll re-announces every file ever received, which is how a
+	# delivery alert becomes noise nobody reads.
 	mkdir -p "$INBOX" 2>/dev/null
 	chmod 0700 "$INBOX" 2>/dev/null
-	before="$(ls -1 "$INBOX" 2>/dev/null)"
 
+	# First ever run: adopt whatever is already on disk as seen, so installing
+	# the module does not announce every file the daemon delivered beforehand.
+	if [ ! -f "$SEEN_FILE" ]; then
+		: > "$SEEN_FILE" 2>/dev/null || true
+		for d in "$INBOX" "$DROP_DIR"; do
+			[ -d "$d" ] || continue
+			for f in "$d"/*; do
+				[ -f "$f" ] || continue
+				printf '%s\t%s\n' "$d" "$(basename "$f")" >> "$SEEN_FILE" 2>/dev/null
+			done
+		done
+	fi
+
+	before_inbox="$(ls -1 "$INBOX" 2>/dev/null)"
+	before_drop=""
+	if [ -d "$DROP_DIR" ]; then
+		before_drop="$(ls -1 "$DROP_DIR" 2>/dev/null)"
+		# Daemon-owned: only we may write here.
+		chmod 0771 "$DROP_DIR" 2>/dev/null
+	fi
+
+	# Kept for older daemons. Harmless and near-free on a current one.
 	timeout 60 "$TS_CLI" file get --conflict=rename "$INBOX" >/dev/null 2>&1
 
 	names=""
 	exported=""
 	first=""
 	count=0
-	for f in "$INBOX"/*; do
-		[ -f "$f" ] || continue
-		base="$(basename "$f")"
-		# Exact-line match against the snapshot taken before the pull. Done
-		# with grep -x rather than a `case` on embedded newlines: that form
-		# did not match under Android's shell, which silently turned every
-		# arrival into "already seen".
-		if [ -n "$before" ] && printf '%s\n' "$before" | grep -Fxq -- "$base"; then
-			continue
-		fi
-		count=$((count + 1))
-		names="${names}${names:+, }$base"
-		out="$(copy_out "$f")"
-		if [ -n "$out" ]; then
-			exported="${exported}${exported:+, }$(basename "$out")"
-			[ -n "$first" ] || first="$out"
-			# Drop the inbox copy once the export is confirmed.
+
+	# $1 = directory, $2 = pre-pull listing of that directory.
+	sweep() {
+		_dir="$1"
+		_before="$2"
+		[ -d "$_dir" ] || return 0
+		for f in "$_dir"/*; do
+			[ -f "$f" ] || continue
+			base="$(basename "$f")"
+			# Exact-line match against the snapshot. Done with grep -x rather
+			# than a `case` on embedded newlines: that form did not match under
+			# Android's shell, which silently turned every arrival into
+			# "already seen".
+			# Two different "have I seen this" tests, because the two directories
+			# behave differently.
 			#
-			# `tailscale file get` never removes what it copied, so the inbox is
-			# a permanent archive: without this the device accumulates a second
-			# copy of every file it has ever received, forever. Deleting only
-			# after a successful export means a failed copy is retried on the
-			# next cycle instead of being lost.
-			rm -f "$f" 2>/dev/null || true
-		fi
-	done
+			# The inbox is filled by `file get` *during* this cycle, so a snapshot
+			# taken before that pull is a correct baseline.
+			#
+			# DROP_DIR is filled asynchronously by the daemon. A per-cycle
+			# snapshot there skips every arrival that landed between one cycle's
+			# sweep and the next cycle's snapshot -- always, silently. Only the
+			# persistent list can decide, so that is the only test applied to it.
+			if [ "$_dir" = "$INBOX" ] && [ -n "$_before" ] &&
+				printf '%s\n' "$_before" | grep -Fxq -- "$base"; then
+				continue
+			fi
+			if [ -f "$SEEN_FILE" ] &&
+				printf '%s\t%s\n' "$_dir" "$base" | grep -Fxq -f "$SEEN_FILE" 2>/dev/null; then
+				continue
+			fi
+			printf '%s\t%s\n' "$_dir" "$base" >> "$SEEN_FILE" 2>/dev/null || true
+			count=$((count + 1))
+			names="${names}${names:+, }$base"
+			out="$(copy_out "$f")"
+			if [ -n "$out" ]; then
+				exported="${exported}${exported:+, }$(basename "$out")"
+				[ -n "$first" ] || first="$out"
+				# Drop the inbox copy once the export is confirmed. The delivery
+				# folder is left alone: it belongs to the daemon, not to us.
+				[ "$_dir" = "$INBOX" ] && rm -f "$f" 2>/dev/null
+			fi
+		done
+	}
+
+	sweep "$INBOX" "$before_inbox"
+	sweep "$DROP_DIR" "$before_drop"
 
 	if [ "$count" -gt 0 ]; then
 		log_line "received ${count}: ${names}"
