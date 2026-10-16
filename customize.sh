@@ -64,6 +64,11 @@ SERVICE_DIR="/data/adb/service.d"
 # upstream Tailscale with the Android port applied (see builder/ in this repo),
 # so a fresh install gets a current binary instead of whatever the upstream
 # module happened to bundle when it was released.
+# The daemon builds are published as release assets of the archived
+# tailscale-android-cli repo, which is where build-binaries.sh has always
+# uploaded them. The feed pointer in this repo's tailscale-latest.json names
+# that repo explicitly, and the updater on the device reads the same feed, so
+# installer and updater can never disagree about where the binary lives.
 TS_BIN_REPO="paras-moharle/tailscale-android-cli"
 
 TS_DIR="/data/adb/tailscale"

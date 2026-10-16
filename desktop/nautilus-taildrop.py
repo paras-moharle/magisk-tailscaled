@@ -87,6 +87,29 @@ def _run(args, timeout=30):
     )
 
 
+def _progress(done, total, name):
+    """One notification, replaced in place, showing how far along we are.
+
+    A notification per file would be noise, and none at all is what made a
+    fast send look like a hang. Nautilus has nowhere to draw a progress bar, so
+    the shade is the surface: same notification ID every time, so it updates.
+    """
+    if total <= 1:
+        return
+    if done < total:
+        title = f"Sending {done + 1}/{total}"
+    else:
+        title = f"Sent {done}/{total}"
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "Taildrop", "-u", "low",
+             "-i", "mail-send", "-r", "777", title, name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            check=False)
+    except Exception:
+        pass
+
+
 def _notify(title, body):
     """Report the outcome. Never raises.
 
@@ -216,9 +239,12 @@ def _peer_now(label):
     return None
 
 
-def _send(path, label, archive):
+def _send(path, label, archive, done=0, total=1):
     name = os.path.basename(path)
+    _progress(done, total, name)
 
+    # A stale or wedged connection must not hold the whole batch hostage.
+    per_file = max(30, SEND_TIMEOUT // 2)
     # Resolve the address at send time, not from the menu-time cache.
     dest = _peer_now(label)
     for attempt in (1, 2):
@@ -227,12 +253,14 @@ def _send(path, label, archive):
                     f"{label} is not an online device any more ({name})")
             return
         rc, out, err = _run(
-            ["tailscale", "file", "cp", path, f"{dest}:"], timeout=SEND_TIMEOUT
+            ["tailscale", "file", "cp", path, f"{dest}:"], timeout=per_file
         )
         if rc == 0:
-            _notify("Taildrop", f"{name} → {label}")
+            _progress(done + 1, total, name)
             if archive and os.path.exists(archive):
                 os.unlink(archive)
+            if done + 1 >= total:
+                _notify("Taildrop", f"Sent {total} file(s) → {label}")
             return
         # The address may have moved under us. Re-resolve and try once more.
         if attempt == 1:
@@ -262,8 +290,9 @@ def _send_async(files, label):
                 _notify("Taildrop: send failed", f"{info.get_name()}: {exc}")
         if not staged:
             return
-        for _info, (path, archive) in staged:
-            _send(path, label, archive)
+        total = len(staged)
+        for n, (_info, (path, archive)) in enumerate(staged):
+            _send(path, label, archive, done=n, total=total)
 
     threading.Thread(target=work, daemon=True).start()
 

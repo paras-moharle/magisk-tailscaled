@@ -53,10 +53,25 @@ echo "==> compiling resources"
 "$BT/aapt2" compile --dir "$HERE/res" -o "$OUT/res.zip"
 
 echo "==> linking resources"
+# The manifest carries a placeholder version, because the app ships inside the
+# module and must agree with it. Without this the installed app reports 1.0.0
+# forever while the module is on v1.0.x, which makes "which version am I
+# running?" unanswerable.
+MOD_VERSION="$(sed -n 's/^version=//p' "$HERE/../module.prop" 2>/dev/null | head -1)"
+[ -n "$MOD_VERSION" ] || MOD_VERSION="0.0.0"
+MOD_VERSION_CODE="$(sed -n 's/^versionCode=//p' "$HERE/../module.prop" 2>/dev/null | head -1)"
+[ -n "$MOD_VERSION_CODE" ] || MOD_VERSION_CODE="1"
+
+MANIFEST="$OUT/AndroidManifest.xml"
+sed -e "s/android:versionName=\"[^\"]*\"/android:versionName=\"$MOD_VERSION\"/" \
+	-e "s/android:versionCode=\"[^\"]*\"/android:versionCode=\"$MOD_VERSION_CODE\"/" \
+	"$HERE/AndroidManifest.xml" > "$MANIFEST"
+echo "    version $MOD_VERSION ($MOD_VERSION_CODE)"
+
 "$BT/aapt2" link \
 	-o "$OUT/unsigned-unaligned.apk" \
 	-I "$JAR" \
-	--manifest "$HERE/AndroidManifest.xml" \
+	--manifest "$MANIFEST" \
 	--min-sdk-version 26 \
 	--target-sdk-version "$PLATFORM_VER" \
 	-R "$OUT/res.zip" \

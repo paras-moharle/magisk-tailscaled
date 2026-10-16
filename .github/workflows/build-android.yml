@@ -91,7 +91,7 @@ jobs:
             dist/latest.json
 
       # The phone must have ONE stable URL to poll. /releases/latest/ cannot be
-      # used here: this repo also publishes module releases (v1.0.3), so
+      # used here: this repo also publishes module releases, so
       # "latest" flips between a module zip and a daemon binary and the feed
       # breaks half the time. A file on main has no such ambiguity.
       - name: Publish the feed pointer

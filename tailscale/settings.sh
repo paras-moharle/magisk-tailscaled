@@ -19,7 +19,7 @@ TS_BIN_DIR="${TS_DIR}/bin"
 # phones sit behind CGNAT where a whole carrier can share one address, so an
 # API-based check gets 403'd for hours at a time.
 # The feed is a file on the default branch, not /releases/latest/download/:
-# this repo publishes BOTH module releases (v1.0.3) and daemon binaries
+# this repo publishes BOTH module releases and (for historical builds) daemon binaries
 # (v1.105.0-android), so "latest" would flip between the two and break the
 # check roughly half the time. One pinned URL cannot do that.
 export TS_LATEST_URL="${TS_LATEST_URL:-https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/tailscale-latest.json}"
