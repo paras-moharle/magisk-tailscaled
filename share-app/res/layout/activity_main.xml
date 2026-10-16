@@ -5,8 +5,13 @@
 	android:orientation="vertical"
 	android:background="@drawable/bg_app">
 
-	<!-- ── header: one title line, nothing more ───────────────── -->
+	<!-- ── header: one title line, nothing more ─────────────────
+	     The top padding here is only a floor. The real status-bar inset is
+	     added at runtime, because a fixed value is either cramped under a
+	     tall status bar or wasteful under a short one, and it is measured
+	     per device rather than guessed. -->
 	<LinearLayout
+		android:id="@+id/header"
 		android:layout_width="match_parent"
 		android:layout_height="wrap_content"
 		android:orientation="horizontal"

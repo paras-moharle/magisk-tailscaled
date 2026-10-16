@@ -195,6 +195,7 @@ api_status() {
 	        rx: (.RxBytes // 0),
 	        tx: (.TxBytes // 0),
 	        lastSeen: (.LastSeen // ""),
+        direct: (.PeerRelay // "") == "" and (.Online // false),
 	        exitNode: (.ExitNodeOption // false),
 	        active: (.Active // false),
 	        tags: arr(.Tags)
@@ -500,6 +501,13 @@ send)
 receive)
 	shift
 	api_receive "$@"
+	;;
+ping)
+	shift
+	api_ping "$@"
+	;;
+received)
+	api_received
 	;;
 logs)
 	shift

@@ -47,13 +47,20 @@ final class Api {
 		 *  device that is known but down, so it is obvious it is down instead
 		 *  of appearing to have been removed. */
 		final boolean online;
+		/** When this peer was last seen, as the daemon reports it. */
+		final String lastSeen;
+		/** Offers itself as an exit node. */
+		final boolean exitNodeOption;
 
-		Peer(String name, String ip, String os, boolean exitNode, boolean online) {
+		Peer(String name, String ip, String os, boolean exitNode, boolean online,
+				String lastSeen, boolean exitNodeOption) {
 			this.name = name;
 			this.ip = ip;
 			this.os = os;
 			this.exitNode = exitNode;
 			this.online = online;
+			this.lastSeen = lastSeen;
+			this.exitNodeOption = exitNodeOption;
 		}
 
 	}
@@ -87,7 +94,9 @@ final class Api {
 					ip,
 					p.optString("os", ""),
 					p.optBoolean("exitNode", false),
-					p.optBoolean("online", false)));
+					p.optBoolean("online", false),
+					p.optString("lastSeen", ""),
+					p.optBoolean("exitNodeOption", false)));
 		}
 		return out;
 	}
@@ -106,6 +115,16 @@ final class Api {
 	/** Apply a preference. Returns the refreshed status document. */
 	static JSONObject set(String key, String value) throws Exception {
 		return call("set", key, value);
+	}
+
+	/** Round-trip time and path to a peer. */
+	static JSONObject ping(String ip) throws Exception {
+		return call("ping", ip);
+	}
+
+	/** What the Taildrop receiver collected while the app was away. */
+	static JSONObject received() throws Exception {
+		return call("received");
 	}
 
 	/** start | stop | restart | status */

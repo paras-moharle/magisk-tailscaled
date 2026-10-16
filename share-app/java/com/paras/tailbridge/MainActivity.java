@@ -120,6 +120,15 @@ public class MainActivity extends Activity {
 		final View refreshBtn = findViewById(R.id.refresh);
 		refreshBtn.setOnClickListener(v -> manualRefresh());
 
+		applyWindowInsets();
+
+		final ScrollView sendScroll = findViewById(R.id.scrollSend);
+		final View refreshBtn2 = findViewById(R.id.refresh);
+		attachPullToRefresh(sendScroll, () -> refreshBtn2.animate()
+				.rotationBy(360f).setDuration(520).start());
+		attachPullToRefresh(findViewById(R.id.scrollSettings), () -> { });
+		attachPullToRefresh(findViewById(R.id.scrollSystem), () -> { });
+
 		defaultTargets = getPreferences(0).getString("targets", "");
 		android.content.Intent launch = getIntent();
 		if (launch != null && launch.getAction() != null
@@ -349,6 +358,91 @@ public class MainActivity extends Activity {
 	 * Restarts the poll chain too, so the next automatic read is a full
 	 * interval away rather than firing immediately on top of this one.
 	 */
+	/**
+	 * Push the status-bar height into the header's top padding.
+	 *
+	 * <p>The layout carries a paddingTop as a floor, but a fixed number cannot
+	 * be right: on this device the header sat under the clock. Reading the
+	 * actual inset is the difference between a title that has room and one that
+	 * fights the system bar, and it adapts to cutouts and gesture bars too.
+	 */
+
+	/**
+	 * Pull down anywhere on a list to refresh.
+	 *
+	 * <p>Hand-rolled because this app has no AndroidX, and SwipeRefreshLayout is
+	 * an AndroidX view: adding it for one gesture would mean the app depends on
+	 * a library it currently has no use for. The gesture is small -- a downward
+	 * drag past the threshold while the list is already at the top.
+	 */
+	private void attachPullToRefresh(android.widget.ScrollView sv, Runnable onPull) {
+		final int touchSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+		final int trigger = dp(72);
+		// Held in an array so the listener can mutate them: plain locals would
+		// have to be final to be reachable from the lambda.
+		final float[] downY = {0f};
+		final boolean[] tracking = {false};
+
+		sv.setOnTouchListener((v, ev) -> {
+			switch (ev.getActionMasked()) {
+				case android.view.MotionEvent.ACTION_DOWN:
+					downY[0] = ev.getY();
+					// Only arm at the top of the list; below it a downward drag is
+					// scroll-back and belongs to the list, not to us.
+					tracking[0] = sv.getScrollY() <= 0;
+					return false;
+
+				case android.view.MotionEvent.ACTION_MOVE:
+					if (!tracking[0]) {
+						return false;
+					}
+					float dy = ev.getY() - downY[0];
+					if (dy > trigger) {
+						tracking[0] = false;
+						v.setTranslationY(0f);
+						manualRefresh();
+						onPull.run();
+						return true;
+					}
+					if (dy > 0) {
+						// Resistance, so it feels attached rather than loose.
+						v.setTranslationY(dy * 0.45f);
+						return true;
+					}
+					return false;
+
+				case android.view.MotionEvent.ACTION_UP:
+				case android.view.MotionEvent.ACTION_CANCEL:
+					tracking[0] = false;
+					v.animate().translationY(0f).setDuration(160).start();
+					return false;
+
+				default:
+					return false;
+			}
+		});
+	}
+
+	private void applyWindowInsets() {
+		final View header = findViewById(R.id.header);
+		final int floor = dp(22);
+		header.setOnApplyWindowInsetsListener((v, insets) -> {
+			int top = 0;
+			if (android.os.Build.VERSION.SDK_INT >= 30) {
+				android.graphics.Insets bars = insets.getInsets(
+						android.view.WindowInsets.Type.systemBars()
+								| android.view.WindowInsets.Type.displayCutout());
+				top = bars.top;
+			} else {
+				top = insets.getSystemWindowInsetTop();
+			}
+			v.setPadding(v.getPaddingLeft(), floor + top, v.getPaddingRight(),
+					v.getPaddingBottom());
+			return insets;
+		});
+		header.requestApplyInsets();
+	}
+
 	private void manualRefresh() {
 		View btn = findViewById(R.id.refresh);
 		btn.setEnabled(false);
@@ -603,6 +697,12 @@ public class MainActivity extends Activity {
 			final JSONObject stFinal = st;
 
 			// Off the critical path.
+			// A network call behind every refresh is why refreshing felt slow,
+			// even with a warm daemon. Once an hour is plenty for a row of text.
+			if (System.currentTimeMillis() - lastUpdateCheck < UPDATE_CHECK_MIN_MS) {
+				return;
+			}
+			lastUpdateCheck = System.currentTimeMillis();
 			new Thread(() -> {
 				try {
 					final String latest = Api.updateCheck();
@@ -832,6 +932,13 @@ public class MainActivity extends Activity {
 		}
 	};
 
+	/** The "N files arrived" note is fetched once per launch, not per render. */
+	private boolean receivedChecked;
+
+	/** At most one network update check per hour. */
+	private static final long UPDATE_CHECK_MIN_MS = 3600_000L;
+	private long lastUpdateCheck;
+
 	private void startPolling() {
 		ui.removeCallbacks(poll);
 		ui.postDelayed(poll, POLL_MS);
@@ -952,6 +1059,31 @@ public class MainActivity extends Activity {
 			note(pSend, getString(R.string.shared_n, pendingUris.size()));
 		}
 
+		// Files that arrived while the app was closed. The notification covers
+		// the moment of arrival, but the app is where you look later, and a
+		// file that is only discoverable by opening a shade you have since
+		// cleared is a file you will assume never arrived.
+		if (!receivedChecked) {
+			receivedChecked = true;
+			// Off the render path: this is a second `su` round-trip and running
+			// it inline doubled the cost of opening the app.
+			new Thread(() -> {
+				try {
+					JSONObject got = Api.received();
+					final int n = got.optInt("count", 0);
+					if (n > 0) {
+						ui.post(() -> {
+							if (pSend != null) {
+								note(pSend, getString(R.string.received_while_away, n));
+							}
+						});
+					}
+				} catch (Exception ignored) {
+					// The marker is a nicety, not a requirement.
+				}
+			}).start();
+		}
+
 		// ── daemon ──
 		LinearLayout d = group(pSend, getString(R.string.daemon));
 		addSwitch(d, getString(R.string.service),
@@ -1016,6 +1148,61 @@ public class MainActivity extends Activity {
 		}
 	}
 
+
+	/** "just now" / "4m ago" / "3h ago" / "2d ago", or "" if unknown.
+	 *
+	 * <p>Parsed here rather than pre-formatted by the daemon, because the app
+	 * has to say "4 minutes ago" relative to now, and the daemon's clock and
+	 * the phone's are the same but the language is not.
+	 */
+	private String lastSeenLabel(String iso) {
+		if (iso == null || iso.isEmpty() || iso.startsWith("0001-")) {
+			return "";
+		}
+		long then;
+		try {
+			then = java.time.Instant.parse(iso.replaceAll("\\.[0-9]+Z?$", "Z")).toEpochMilli();
+		} catch (Exception e) {
+			return "";
+		}
+		long mins = (System.currentTimeMillis() - then) / 60000L;
+		if (mins < 1) {
+			return getString(R.string.time_now);
+		}
+		if (mins < 60) {
+			return mins + getString(R.string.time_min);
+		}
+		long hours = mins / 60;
+		if (hours < 24) {
+			return hours + getString(R.string.time_hour);
+		}
+		return (hours / 24) + getString(R.string.time_day);
+	}
+
+	/** Latency chip for a peer; taps run `tailscale ping` and show the result. */
+	private void pingPeer(Api.Peer p, TextView slot) {
+		slot.setText(getString(R.string.pinging));
+		new Thread(() -> {
+			String text;
+			try {
+				JSONObject r = Api.ping(p.ip);
+				double ms = r.optDouble("latencyMs", -1);
+				boolean direct = r.optBoolean("direct", false);
+				if (ms < 0) {
+					text = getString(R.string.ping_failed);
+				} else {
+					text = String.format(java.util.Locale.getDefault(), "%.0f ms  %s",
+							ms, getString(direct ? R.string.ping_direct
+									: R.string.ping_relay));
+				}
+			} catch (Exception e) {
+				text = getString(R.string.ping_failed);
+			}
+			final String f = text;
+			ui.post(() -> slot.setText(f));
+		}).start();
+	}
+
 	private View peerRow(Api.Peer p) {
 		LinearLayout row = row();
 		final boolean up = p.online;
@@ -1049,10 +1236,16 @@ public class MainActivity extends Activity {
 		n.setSingleLine(true);
 		col.addView(n);
 		TextView meta = new TextView(this);
+		// "offline · 4m ago" tells you whether to wait or give up. A bare
+		// "offline" is a dead end: it gives no hint of how stale it is.
+		String when = up ? "" : lastSeenLabel(p.lastSeen);
 		meta.setText(p.ip
 				+ (p.os.isEmpty() ? "" : "  ·  " + p.os)
 				+ (p.exitNode ? "  ·  " + getString(R.string.exit_node_suffix) : "")
-				+ (up ? "" : "  ·  " + getString(R.string.peer_offline_label)));
+				+ (p.exitNodeOption && !p.exitNode
+					? "  ·  " + getString(R.string.exit_node_suffix) : "")
+				+ (up ? "" : "  ·  " + getString(R.string.peer_offline_label)
+					+ (when.isEmpty() ? "" : "  ·  " + when)));
 		meta.setTextColor(getColor(R.color.text2));
 		meta.setTextSize(12);
 		col.addView(meta);
@@ -1069,6 +1262,20 @@ public class MainActivity extends Activity {
 		send.setEnabled(up);
 		send.setAlpha(up ? 1f : 0.35f);
 		row.addView(send);
+
+		// Latency, on demand. An online peer can still be a slow one, and
+		// knowing whether the path is direct or relayed is the difference
+		// between "Tailscale is broken" and "it is going via Bangalore".
+		TextView ping = new TextView(this);
+		ping.setText(up ? getString(R.string.ping_tap) : "");
+		ping.setTextColor(getColor(R.color.hint));
+		ping.setTextSize(10);
+		ping.setGravity(android.view.Gravity.CENTER);
+		ping.setPadding(dp(6), dp(4), dp(6), dp(4));
+		if (up) {
+			ping.setOnClickListener(v -> pingPeer(p, ping));
+		}
+		row.addView(ping);
 
 		// Tapping anywhere else on the row is the same as the checkbox.
 		// Offline peers are inert: selecting one would queue a send that
@@ -1289,6 +1496,81 @@ public class MainActivity extends Activity {
 
 	// -------------------------------------------------------------- settings
 
+
+	/** IP of the exit node currently in use, or "" for none. */
+	private String currentExitNodeIp(JSONObject st) {
+		if (st == null) {
+			return "";
+		}
+		JSONObject en = st.optJSONObject("exitNode");
+		return en == null ? "" : en.optString("ip", "");
+	}
+
+	private String exitNodeSummary(JSONObject st) {
+		String ip = currentExitNodeIp(st);
+		if (ip.isEmpty()) {
+			return getString(R.string.exit_node_none);
+		}
+		JSONObject en = st.optJSONObject("exitNode");
+		if (en != null) {
+			List<Api.Peer> ps = Api.peersFrom(st);
+			for (Api.Peer p : ps) {
+				if (ip.equals(p.ip)) {
+					return p.name;
+				}
+			}
+		}
+		return ip;
+	}
+
+	private void showExitNodePicker(JSONObject st, List<Api.Peer> candidates) {
+		final List<String> labels = new ArrayList<>();
+		final List<String> values = new ArrayList<>();
+		labels.add(getString(R.string.exit_node_none));
+		values.add("none");
+		for (Api.Peer p : candidates) {
+			labels.add(p.name + (p.online ? "" : "  (" + getString(R.string.peer_offline_label) + ")"));
+			values.add(p.ip);
+		}
+
+		final String cur = currentExitNodeIp(st);
+		int checked = values.indexOf(cur);
+		if (checked < 0) {
+			checked = 0;
+		}
+
+		new android.app.AlertDialog.Builder(this, R.style.Theme_Share_Dialog)
+				.setTitle(getString(R.string.t_use_exit))
+				.setSingleChoiceItems(labels.toArray(new CharSequence[0]), checked,
+						(d, which) -> {
+							d.dismiss();
+							final String value = values.get(which);
+							if (value.equals(cur)) {
+								return;
+							}
+							new Thread(() -> {
+								String err = null;
+								try {
+									Api.set("exit-node", value);
+								} catch (Exception e) {
+									err = String.valueOf(e.getMessage());
+								}
+								final String e2 = err;
+								ui.post(() -> {
+									if (e2 == null) {
+										toast(getString(R.string.exit_node_set,
+												"none".equals(value)
+														? getString(R.string.exit_node_none)
+														: labels.get(values.indexOf(value))));
+									}
+									refresh();
+								});
+							}).start();
+						})
+				.setNegativeButton(android.R.string.cancel, null)
+				.show();
+	}
+
 	private void buildSettings(JSONObject st) {
 		pSettings.removeAllViews();
 		switches.clear();
@@ -1302,6 +1584,25 @@ public class MainActivity extends Activity {
 				getString(R.string.d_accept_routes), flags, online);
 		addToggle(c1, "shields-up", getString(R.string.t_shields_up),
 				getString(R.string.d_shields_up), flags, online);
+
+		// Use an exit node.
+		//
+		// Advertising one is a toggle; *choosing* one was missing entirely, which
+		// is the half people actually use. A node only appears here when it says
+		// it offers itself -- there is no point listing peers that will refuse.
+		List<Api.Peer> candidates = new ArrayList<>();
+		for (Api.Peer pp : Api.peersFrom(st)) {
+			if (pp.exitNodeOption) {
+				candidates.add(pp);
+			}
+		}
+		if (online) {
+			final String curIp = currentExitNodeIp(st);
+			final List<Api.Peer> finalCands = candidates;
+			action(c1, getString(R.string.t_use_exit),
+					exitNodeSummary(st) + "  ·  " + getString(R.string.d_use_exit),
+					v -> showExitNodePicker(st, finalCands));
+		}
 
 		LinearLayout c2 = group(pSettings, getString(R.string.services));
 		addToggle(c2, "run-ssh", getString(R.string.t_ssh), getString(R.string.d_ssh), flags, online);
@@ -1412,8 +1713,11 @@ public class MainActivity extends Activity {
 		LinearLayout a1 = group(pSystem, getString(R.string.account));
 		value(a1, getString(R.string.tailnet), account.isEmpty()
 				? getString(R.string.not_signed_in) : account);
-		action(a1, getString(R.string.sign_in), null, v -> doLogin());
-		if (!account.isEmpty()) {
+		// Only offer the action that makes sense. Showing "Sign in" to someone
+		// who is already signed in reads as though the app did not notice.
+		if (account.isEmpty()) {
+			action(a1, getString(R.string.sign_in), null, v -> doLogin());
+		} else {
 			action(a1, getString(R.string.sign_out), null, v -> confirmSignOut());
 		}
 

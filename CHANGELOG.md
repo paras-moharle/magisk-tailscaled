@@ -1,3 +1,43 @@
+## v1.0.14
+
+### Header sat under the status bar
+
+The header's top padding was a fixed `22dp`. That is either cramped under a
+tall status bar or wasteful under a short one, and it is measured per device
+rather than guessed. The real system-bar inset is now read at runtime and added
+to that floor, so the title clears the clock on any device, including cutouts
+and gesture bars.
+
+### "Sign in" was offered to people already signed in
+
+The row was unconditional, so an authenticated user saw both Sign in and Sign
+out, next to a Tailnet showing their address. It reads as though the app never
+noticed. Whichever action makes sense is now the only one shown.
+
+### Refreshing no longer waits on the internet
+
+Every refresh kicked off a **network** update check behind the status read, so a
+tap on refresh looked like it hung on a local root call. Throttled to once an
+hour. The "N files arrived" note is also a second `su` round-trip and is now
+fetched once per launch, off the render path, instead of on every rebuild.
+
+### Exit nodes
+
+You could *advertise* this phone as an exit node but there was no way to
+*choose* one, which is the half people actually use. **Settings → Use an exit
+node** lists only devices that offer themselves, marks offline ones, and can
+disconnect. The current one is shown on the row.
+
+### Peer quality
+
+- **ping** on a peer row: latency, and whether the path is direct or relayed.
+  An online peer can still be a slow one, and "it is going via Bangalore" is a
+  different problem from "Tailscale is broken".
+- **last seen** on offline peers: "offline · 4m ago" tells you whether to wait
+  or give up.
+- **pull to refresh** on all three tabs, alongside the button.
+- **files received while the app was closed**, on the Send tab.
+
 ## v1.0.13
 
 ### The phone installs updates itself now

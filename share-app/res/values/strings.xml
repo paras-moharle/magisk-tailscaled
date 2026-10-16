@@ -142,4 +142,18 @@
 	<string name="taildrop_open_with">Open with</string>
 	<string name="send_no_online">No device online</string>
 	<string name="send_need_signin">Sign in to send</string>
+	<string name="t_use_exit">Use an exit node</string>
+	<string name="d_use_exit">Route all traffic through a chosen device</string>
+	<string name="exit_node_none">None</string>
+	<string name="exit_node_set">Exit node: %s</string>
+	<string name="ping_tap">ping</string>
+	<string name="pinging">…</string>
+	<string name="ping_failed">no reply</string>
+	<string name="ping_direct">direct</string>
+	<string name="ping_relay">relayed</string>
+	<string name="time_now">just now</string>
+	<string name="time_min">m ago</string>
+	<string name="time_hour">h ago</string>
+	<string name="time_day">d ago</string>
+	<string name="received_while_away">%d file(s) received</string>
 </resources>
