@@ -116,6 +116,12 @@ def _notify(title, body):
 _snapshot = ("", [], 0.0)  # (backend_state, [(name, ip)], fetched_at)
 
 
+def _invalidate():
+    """Force the next read to re-query, e.g. after an address went stale."""
+    global _snapshot
+    _snapshot = ("", [], 0.0)
+
+
 def _refresh_once():
     global _snapshot
     rc, out, _ = _run(["tailscale", "status", "--json"], timeout=5)
@@ -193,26 +199,58 @@ def _stage(fileinfo):
     return path, None
 
 
-def _send(path, dest, label, archive):
-    rc, out, err = _run(
-        ["tailscale", "file", "cp", path, f"{dest}:"], timeout=SEND_TIMEOUT
-    )
+def _peer_now(label):
+    """Resolve a peer's current address by name, ignoring the cache.
+
+    A cached address is fine until the peer's tailnet IP changes -- which it
+    does when a device re-registers. `tailscale file cp` does not fail loudly
+    for an address that has gone away; it queues the file and reports success,
+    so the send is simply lost. Re-resolving at send time is what makes this
+    survive an address change.
+    """
+    _invalidate()
+    _refresh_once()
+    for name, ip in _snapshot[1]:
+        if name == label:
+            return ip
+    return None
+
+
+def _send(path, label, archive):
     name = os.path.basename(path)
-    if rc == 0:
-        _notify("Taildrop", f"{name} → {label}")
-        if archive and os.path.exists(archive):
-            os.unlink(archive)
-        return
+
+    # Resolve the address at send time, not from the menu-time cache.
+    dest = _peer_now(label)
+    for attempt in (1, 2):
+        if dest is None:
+            _notify("Taildrop: send failed",
+                    f"{label} is not an online device any more ({name})")
+            return
+        rc, out, err = _run(
+            ["tailscale", "file", "cp", path, f"{dest}:"], timeout=SEND_TIMEOUT
+        )
+        if rc == 0:
+            _notify("Taildrop", f"{name} → {label}")
+            if archive and os.path.exists(archive):
+                os.unlink(archive)
+            return
+        # The address may have moved under us. Re-resolve and try once more.
+        if attempt == 1:
+            again = _peer_now(label)
+            if again and again != dest:
+                dest = again
+                continue
+            break
 
     detail = (err or out or "").strip().splitlines()
-    body = (detail[-1] if detail else f"exit {rc}") + f" ({name})"
+    body = (detail[-1] if detail else f"exit {rc}") + f" ({name} → {label})"
     if archive:
         # Keep it so the send can be retried rather than rebuilt.
         body += f"\nArchive kept: {archive}"
     _notify("Taildrop: send failed", body)
 
 
-def _send_async(files, dest, label):
+def _send_async(files, label):
     """Stage and send on a worker thread, one command per file."""
 
     def work():
@@ -225,7 +263,7 @@ def _send_async(files, dest, label):
         if not staged:
             return
         for _info, (path, archive) in staged:
-            _send(path, dest, label, archive)
+            _send(path, label, archive)
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -266,7 +304,9 @@ class TaildropProvider(GObject.GObject, Nautilus.MenuProvider):
             return []
 
     def _on_activate(self, _item, files, name, ip):
-        _send_async(files, ip, name)
+        # `ip` is deliberately not used for the send: see _peer_now. It is only
+        # what the menu entry was labelled with.
+        _send_async(files, name)
         return True
 
     # Nautilus calls these two. The folder background is deliberately a no-op:
