@@ -3,7 +3,7 @@
 Tailscale on a rooted Android phone, with the daemon built from upstream and
 updated automatically.
 
-[![module](https://img.shields.io/badge/module-v1.0.19-4ea1ff)](module.prop)
+[![module](https://img.shields.io/badge/module-v1.0.20-4ea1ff)](module.prop)
 [![tailscale](https://img.shields.io/badge/tailscale-1.104.1-3ddc84)](https://tailscale.com)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-a78bfa)](LICENSE)
 
@@ -11,7 +11,7 @@ updated automatically.
 
 ## Install
 
-1. Download **`Tailscaled-Reborn-v1.0.19-full.zip`** from
+1. Download **`Tailscaled-Reborn-v1.0.20-full.zip`** from
    [releases](../../releases).
 2. **Magisk / KernelSU → Modules → Install from storage.**
 3. Reboot.
@@ -44,10 +44,11 @@ does not queue behind it.
 Files land in `Downloads/Tailscale` and raise a notification with an *Open*
 action. Nothing to tap on the phone.
 
-**On Linux**, something has to collect them. The daemon drops them in your
-downloads directory; `tailscale file get` returns success and collects nothing.
-The receiver watches that directory and takes only files that appeared since it
-last looked, so it never touches your own downloads:
+**On Linux**, something has to fetch them. Unlike Android, the Linux daemon
+holds a delivery until `tailscale file get` is called, and `tailscale file cp`
+reports success the whole time without delivering anything. The receiver polls
+that into a staging directory of its own and moves the results into
+`Downloads/Tailscale`:
 
 ```sh
 install -Dm755 desktop/taildrop-receiver ~/.local/bin/taildrop-receiver
