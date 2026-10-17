@@ -1553,7 +1553,26 @@ public class MainActivity extends Activity {
 
 	/** every file -> every chosen peer, reporting partial failures. */
 	private void dispatch(List<Uri> uris, List<String> to) {
-		final List<String> targets = new ArrayList<>(to);
+		// One send per device, enforced here rather than trusted from the
+		// caller.
+		//
+		// This made a copy of the target list and then iterated the original,
+		// so the copy did nothing: any repeated address in `to` sent the same
+		// file to the same machine that many times. The addresses arrive
+		// already de-duplicated from currentTargets(), but that is a
+		// convention three call sites have to remember, and a file delivered
+		// three times cannot be undone at the receiving end -- it simply
+		// turns into three files and three notifications there.
+		final List<String> targets = new ArrayList<>();
+		for (String p : to) {
+			if (p != null && !p.isEmpty() && !targets.contains(p)) {
+				targets.add(p);
+			}
+		}
+		if (targets.isEmpty()) {
+			toast(getString(R.string.pick_a_device));
+			return;
+		}
 		toast(getString(R.string.sending));
 		new Thread(() -> {
 			java.io.File dir = new java.io.File(getCacheDir(), "send");
@@ -1571,7 +1590,7 @@ public class MainActivity extends Activity {
 			}
 			int ok = 0;
 			StringBuilder problems = new StringBuilder();
-			for (String peer : to) {
+			for (String peer : targets) {
 				for (java.io.File f : files) {
 					try {
 						Api.send(peer, f.getAbsolutePath());
@@ -1590,7 +1609,7 @@ public class MainActivity extends Activity {
 			final String p = problems.toString().trim();
 			ui.post(() -> {
 				if (fFailed == 0) {
-					toast(getString(R.string.sent_ok, fOk, to.size()));
+					toast(getString(R.string.sent_ok, fOk, targets.size()));
 				} else {
 					alert()
 							.setTitle(R.string.send_failed)

@@ -4,46 +4,56 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 paras-moharle
 #
-# ── Why this fetches ────────────────────────────────────────────────────────
+# ── Why this fetches at all ─────────────────────────────────────────────────
 #
-# Linux and Android tailscaled do not behave the same way here.
+# Linux and Android tailscaled do not agree about Taildrop.
 #
-# On Android the daemon writes each delivery straight into
-# /sdcard/Download/Taildrop and there is nothing to fetch; the receiver only
-# has to notice and move it.
+# On Android the daemon writes each delivery straight into the download folder
+# and there is nothing to fetch. On Linux the delivery is held by the daemon:
+# `tailscale file get` collects it, and `tailscale file cp` returns success the
+# entire time without delivering anything. A receiver that waits to be handed
+# the file, the way the phone's does, therefore waits forever on Linux.
 #
-# On Linux the delivery is held by the daemon and `tailscale file cp` returns
-# success without delivering anything until somebody calls
-# `tailscale file get`. This receiver was once rewritten to watch the download
-# directory directly, on the assumption that both platforms behaved like
-# Android. On Linux that assumption is false: the daemon never writes there,
-# so the receiver waited forever for a file that was never coming, while
-# `tailscale file cp` cheerfully reported success. Symptom: the sender is told
-# it worked, and nothing arrives.
+# ── Why it waits instead of polling ─────────────────────────────────────────
 #
-# So: fetch into a staging directory we own, then move the results out.
+# `tailscale file get --wait` blocks until a delivery arrives and then returns.
+# That is event-driven: no five-second sleep between a send happening and the
+# file being collected, and no subprocess started every few seconds for the
+# whole login session.
 #
-# ── Why presence is the whole test ──────────────────────────────────────────
+# The shape follows Omarchy's own receiver, which is the reference here: fetch
+# with --wait, move everything that landed in staging, then wait again. What
+# this adds is that the destination is Downloads/Tailscale rather than loose in
+# Downloads, and that the outcome of each arrival is logged.
 #
-# Each file is moved out of staging as it is collected, so anything still
-# there has not been delivered yet.
+# ── Why staging, and why presence is the whole test ────────────────────────
+#
+# Deliveries are fetched into a directory this owns. Each file is moved out of
+# it as it is collected, so anything still in staging is by definition not
+# delivered yet and there is nothing to track.
 #
 # A seen-list keyed on filename was tried and was wrong: once a name had been
 # seen, every later delivery of that name was skipped forever, so sending the
 # same file twice silently stopped working. Keying on size and mtime did not
 # help either, because re-sending the same file produces identical bytes with
-# the same timestamp. Staging is ours and dedicated, so "everything present is
-# unhandled" is true and there is nothing to track.
+# the same timestamp.
 set -uo pipefail
 
 DEST="${TAILDROP_DEST:-$HOME/Downloads/Tailscale}"
 STATE_DIR="${TAILDROP_STATE:-$HOME/.local/state/taildrop-receiver}"
 STAGING="${TAILDROP_STAGING:-$STATE_DIR/staging}"
 STUCK_FILE="$STATE_DIR/stuck.list"
-INTERVAL="${TAILDROP_INTERVAL:-5}"
+FETCH_LOG="$STATE_DIR/fetch.log"
 CLI="${TAILDROP_CLI:-tailscale}"
 
-log() { printf '%s taildrop-receiver: %s\n' "$(date -Is)" "$*"; }
+# Logs go to stderr, never stdout.
+#
+# deliver() is invoked as `_n="$(deliver)"` to read back how many files it
+# moved, and stdout is the only channel that survives a command substitution.
+# Logging to stdout therefore fed the log lines into that variable, so the
+# count came out as a timestamp: "[: <log line>: integer expected", once per
+# file, in the journal, for every arrival.
+log() { printf '%s taildrop-receiver: %s\n' "$(date -Is)" "$*" >&2; }
 
 if ! command -v "$CLI" >/dev/null 2>&1; then
     log "no '$CLI' on PATH; exiting"
@@ -72,80 +82,131 @@ if [ "${state:-}" != "Running" ]; then
     exit 1
 fi
 
-# Anything already staged arrived while we were down and is still waiting.
-for f in "$STAGING"/*; do
-    [ -f "$f" ] && log "picked up from a previous run: $(basename "$f")"
-done
+# Hard links let a name be taken atomically: link(2) fails rather than
+# clobbering, so two arrivals wanting the same destination cannot race. It only
+# works within one filesystem, so it is probed rather than assumed.
+USE_LN=0
+: > "$STAGING/.probe" 2>/dev/null
+if ln "$STAGING/.probe" "$DEST/.probe" 2>/dev/null; then
+    rm -f "$DEST/.probe"
+    USE_LN=1
+fi
+rm -f "$STAGING/.probe"
+[ "$USE_LN" -eq 1 ] || log "staging and destination are on different filesystems; using move"
 
-log "fetching Taildrop into $STAGING -> $DEST (every ${INTERVAL}s)"
+# Move one staged file into DEST, taking a free name atomically.
+#
+# Only a name that is already taken is worth another attempt. Any other failure
+# means the operation itself did not work, and the file keeps its place in
+# staging for the next pass rather than being retried under a hundred invented
+# names.
+claim_path() {
+    _staged="$1"
+    _name="${_staged##*/}"
+    _base="${_name%.*}"
+    _ext="${_name#"$_base"}"
+    [ -z "$_base" ] && { _base="$_name"; _ext=""; }
 
-# Move one file into DEST without ever clobbering a file already there.
-collect() {
-    _src="$1"
-    _base="$(basename "$_src")"
-    _dst="$DEST/$_base"
-    if [ -e "$_dst" ]; then
-        _stem="${_base%.*}"
-        _ext=""
-        case "$_base" in *.*) _ext=".${_base##*.}" ;; esac
-        _n=1
-        while [ -e "${DEST}/${_stem}-${_n}${_ext}" ]; do
-            _n=$((_n + 1))
-        done
-        _dst="${DEST}/${_stem}-${_n}${_ext}"
-    fi
-    mv -f "$_src" "$_dst" 2>/dev/null && printf '%s' "$_dst"
+    _i=0
+    while [ "$_i" -lt 1000 ]; do
+        if [ "$_i" -eq 0 ]; then
+            _cand="$DEST/$_name"
+        else
+            _cand="$DEST/${_base}-${_i}${_ext}"
+        fi
+
+        if [ "$USE_LN" -eq 1 ]; then
+            if ln -- "$_staged" "$_cand" 2>/dev/null; then
+                rm -f -- "$_staged"
+                printf '%s' "$_cand"
+                return 0
+            fi
+            [ -e "$_cand" ] || return 1
+        else
+            if mv -n -- "$_staged" "$_cand" 2>/dev/null; then
+                printf '%s' "$_cand"
+                return 0
+            fi
+            [ -e "$_cand" ] || return 1
+        fi
+
+        _i=$((_i + 1))
+    done
+    return 1
 }
 
-# A file we could not move out. Said once, not once per poll.
 note_stuck() {
-    _k="$(basename "$1")"
-    if [ -f "$STUCK_FILE" ] && grep -Fxq -- "$_k" "$STUCK_FILE" 2>/dev/null; then
+    _n="${1##*/}"
+    if [ -f "$STUCK_FILE" ] && grep -Fxq -- "$_n" "$STUCK_FILE" 2>/dev/null; then
         return 0
     fi
-    printf '%s\n' "$_k" >> "$STUCK_FILE" 2>/dev/null || true
-    log "could not collect $_k; it stays in $STAGING"
+    printf '%s\n' "$_n" >> "$STUCK_FILE" 2>/dev/null || true
+    log "could not store $_n; it stays in $STAGING"
+}
+
+# Returns how many files it moved, on stdout.
+announce() {
+    _path="$1"
+    _name="${_path##*/}"
+    # Best-effort on purpose: the file is already delivered, and a
+    # notification outage must not take the receiver down with it.
     if command -v notify-send >/dev/null 2>&1; then
-        notify-send -a "Taildrop" "Taildrop: could not store $_k" "$STAGING"
+        if notify-send -a "Taildrop" -u critical \
+                "Received $_name" "Saved to ${DEST/#$HOME/~}"; then
+            log "notified: $_name"
+        else
+            log "notify-send failed for $_name (the file was still delivered)"
+        fi
     fi
 }
 
-sweep() {
-    count=0
-    names=""
-    for f in "$STAGING"/*; do
-        [ -f "$f" ] || continue
-        if out="$(collect "$f")" && [ -n "$out" ]; then
-            count=$((count + 1))
-            names="${names}${names:+, }$(basename "$f")"
-            log "collected $count: $(basename "$f") -> $out"
+deliver() {
+    _got=0
+    for _staged in "$STAGING"/*; do
+        [ -f "$_staged" ] || continue
+        if _target="$(claim_path "$_staged")" && [ -n "$_target" ]; then
+            _got=$((_got + 1))
+            log "collected: ${_staged##*/} -> $_target"
+            announce "$_target"
         else
-            note_stuck "$f"
+            note_stuck "$_staged"
         fi
     done
-    if [ "$count" -gt 0 ]; then
-        _sum="$(printf '%s' "$names" | cut -d, -f1-3 | sed 's/, */, /g')"
-        [ "$count" -gt 3 ] && _sum="$_sum, and $((count - 3)) more"
-        if command -v notify-send >/dev/null 2>&1; then
-            if notify-send -a "Taildrop" -u critical \
-                    "Received $count file(s)" "$_sum — $DEST"; then
-                log "notified: $_sum"
-            else
-                log "notify-send FAILED (exit $?) for: $_sum"
-            fi
-        else
-            log "notify-send is not installed; no alert was shown"
-        fi
-    fi
+    printf '%s' "$_got"
 }
 
-# Anything left from a previous run is collected before the first fetch.
-sweep
+# Anything staged by an interrupted run still deserves delivering.
+deliver >/dev/null
 
+log "watching for Taildrop deliveries into $DEST"
+
+_fetches=0
 while :; do
-    # `file get` returns 0 whether or not anything was waiting, so its status
-    # is not a signal; the sweep above is what decides.
-    timeout 60 "$CLI" file get --conflict=rename "$STAGING" >/dev/null 2>&1 || true
-    sweep
-    sleep "$INTERVAL"
+    if timeout 3600 "$CLI" file get --wait --conflict=rename "$STAGING" \
+            >>"$FETCH_LOG" 2>&1; then
+        _fetches=0
+    else
+        # A daemon restart or a logout looks like this. Stay up: the whole
+        # point is to still be here next time.
+        _fetches=$((_fetches + 1))
+        if [ "$_fetches" -eq 1 ]; then
+            log "fetch returned non-zero; retrying"
+        elif [ "$_fetches" -eq 10 ]; then
+            log "fetch has failed 10 times in a row; see $FETCH_LOG"
+        fi
+        sleep 10
+        continue
+    fi
+
+    _n="$(deliver)"
+    # A file that could not be moved is still staged. Retry it on a short
+    # cadence instead of leaving it until the next unrelated delivery wakes
+    # the loop.
+    _tries=0
+    while [ "$_n" -eq 0 ] && [ "$_tries" -lt 5 ] &&
+            [ -n "$(find "$STAGING" -mindepth 1 -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; do
+        _tries=$((_tries + 1))
+        sleep 5
+        _n="$(deliver)"
+    done
 done

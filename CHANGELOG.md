@@ -70,6 +70,32 @@ unclaimed. It now watches the download directory the daemon actually writes to,
 and collects only files that appeared since it last looked, so it never moves
 your own downloads. The first run adopts what is already there.
 
+### One send could deliver the same file more than once
+
+dispatch() built a de-duplicated copy of the target list and then iterated the
+original, so the copy did nothing. Any address appearing twice in the list sent
+the file twice to the same machine. The addresses do arrive de-duplicated from
+currentTargets(), but that is a convention three call sites have to remember,
+and a file delivered three times cannot be undone at the receiving end: it
+becomes three files and three notifications there, which is what it looks like
+from the other machine. The de-duplication is now done where the send happens.
+
+### The receiver waited in a poll loop instead of being told
+
+`tailscale file get --wait` blocks until a delivery arrives. The receiver was
+calling it on a five-second timer instead, which meant up to five seconds
+between a send and the file being collected, and a subprocess started every
+few seconds for the whole login session. It now waits, following the shape of
+Omarchy's own receiver: fetch with --wait, move whatever landed, wait again.
+
+Taking a destination name uses link(2), which fails rather than clobbering, so
+two arrivals that want the same name cannot race between the check and the
+move. It is probed rather than assumed, because hard links need one filesystem.
+
+Logs went to stdout, which is also the channel `deliver()` returns its count
+on, so the log lines were fed into that variable: "[: <log line>: integer
+expected" once per file, for every arrival.
+
 ### Not leaking
 
 The detached sender is nobody's reaper, so it bounds itself: 120s per file
