@@ -103,8 +103,29 @@ rm -f "$STAGING/.probe"
 claim_path() {
     _staged="$1"
     _name="${_staged##*/}"
-    _base="${_name%.*}"
-    _ext="${_name#"$_base"}"
+    # Keep compound extensions whole: splitting on the last dot alone turned
+    # "photos.tar.gz" into "photos.tar-1.gz", which is not a name anybody has.
+    _base="$_name"
+    _ext=""
+    for _c in .tar.gz .tar.bz2 .tar.xz .tar.zst; do
+        case "$_name" in
+            *"$_c")
+                _ext="$_c"
+                _base="${_name%"$_c"}"
+                break
+                ;;
+        esac
+    done
+    if [ -z "$_ext" ]; then
+        case "$_name" in
+            *.*)
+                _ext=".${_name##*.}"
+                _base="${_name%.*}"
+                ;;
+        esac
+    fi
+    # A dotfile such as ".gitignore" is all extension and no stem; it is one
+    # name, and numbering it must not produce "-1.gitignore".
     [ -z "$_base" ] && { _base="$_name"; _ext=""; }
 
     _i=0

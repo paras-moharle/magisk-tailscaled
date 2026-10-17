@@ -102,11 +102,31 @@ copy_out() {
 	# The destination may hold a file the user has since moved or edited. That
 	# one must never be clobbered.
 	if [ -e "$target" ]; then
-		stem="${name%.*}"
+		# Split the extension off the end, keeping compound suffixes whole.
+		# Splitting on the last dot alone turned "photos.tar.gz" into
+		# "photos.tar-1.gz", which is not a name anybody has.
 		ext=""
-		case "$name" in
-			*.*) ext=".${name##*.}" ;;
-		esac
+		stem="$name"
+		for _c in .tar.gz .tar.bz2 .tar.xz .tar.zst; do
+			case "$name" in
+				*"$_c")
+					ext="$_c"
+					stem="${name%"$_c"}"
+					break
+					;;
+			esac
+		done
+		if [ -z "$ext" ]; then
+			case "$name" in
+				*.*)
+					ext=".${name##*.}"
+					stem="${name%.*}"
+					;;
+			esac
+		fi
+		# A dotfile such as ".gitignore" is all extension and no stem; it is
+		# one name, and numbering it must not produce "-1.gitignore".
+		[ -z "$stem" ] && { stem="$name"; ext=""; }
 		n=1
 		while [ -e "${DEST}/${stem}-${n}${ext}" ]; do
 			n=$((n + 1))

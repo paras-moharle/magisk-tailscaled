@@ -31,6 +31,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -233,13 +234,32 @@ def _get_peers(max_age=None, force=False):
 # ------------------------------------------------------------------------- send
 
 def _archive(folder):
-    """Tar a folder into a temp tarball and return its path."""
+    """Tar a folder into a temp tarball named after the folder.
+
+    The tarball used to be made with tempfile.mkstemp(prefix="taildrop-"), which
+    puts its own random string in front of the name: sending a folder called
+    "Holiday" arrived as taildrop-f2dsoszy-Holiday.tar.gz. The temporary name
+    is where the file happens to sit, not what it is called, and the receiver
+    sees only the name.
+    """
     base = os.path.basename(folder.rstrip("/")) or "folder"
-    fd, path = tempfile.mkstemp(prefix="taildrop-", suffix=f"-{base}.tar.gz")
-    os.close(fd)
-    with tarfile.open(path, "w:gz") as tf:
-        tf.add(folder, arcname=base)
+    scratch = tempfile.mkdtemp(prefix="taildrop-")
+    path = os.path.join(scratch, f"{base}.tar.gz")
+    try:
+        with tarfile.open(path, "w:gz") as tf:
+            tf.add(folder, arcname=base)
+    except Exception:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
     return path
+
+
+def _discard_temp(path):
+    """Remove a temp tarball and the scratch directory holding it."""
+    try:
+        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _stage(fileinfo):
@@ -404,8 +424,8 @@ def _send_file(path, name, archive, done, total, peer_ip=None):
                f"rc={rc} err={err.strip()[:200]!r}")
         if not _real_error(rc, err):
             _progress(done + 1, total, os.path.basename(path))
-            if archive and os.path.exists(archive):
-                os.unlink(archive)
+            if archive:
+                _discard_temp(archive)
             return True
 
         # The address from the menu did not work. Now a live lookup is
@@ -504,15 +524,11 @@ def _send_worker_main(argv):
             except Exception as exc:
                 _debug(f"send raised for {path}: {exc!r}")
     finally:
-        # A folder that never sent would otherwise leave its tarball in
-        # /tmp for the session. Sent ones are removed by _send_file; this
+        # A folder that never sent would otherwise leave its scratch directory
+        # behind for the session. Sent ones are removed by _send_file; this
         # catches the rest.
         for a in archives:
-            try:
-                if os.path.exists(a):
-                    os.unlink(a)
-            except Exception:
-                pass
+            _discard_temp(a)
     _debug(f"sender finished: {ok}/{total} delivered to {label}")
     return 0 if ok == total else 1
 
