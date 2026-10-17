@@ -34,9 +34,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
+import zipfile
 import urllib.parse
 import time
 
@@ -234,20 +234,44 @@ def _get_peers(max_age=None, force=False):
 # ------------------------------------------------------------------------- send
 
 def _archive(folder):
-    """Tar a folder into a temp tarball named after the folder.
+    """Pack a folder into a temporary zip named after the folder.
 
-    The tarball used to be made with tempfile.mkstemp(prefix="taildrop-"), which
-    puts its own random string in front of the name: sending a folder called
-    "Holiday" arrived as taildrop-f2dsoszy-Holiday.tar.gz. The temporary name
-    is where the file happens to sit, not what it is called, and the receiver
-    sees only the name.
+    The archive used to be built with tempfile.mkstemp(prefix="taildrop-"),
+    which puts its own random string in front of the name: sending a folder
+    called "Holiday" arrived as taildrop-f2dsoszy-holiday.tar.gz. The temporary
+    name is where the file sits during the send, not what it is called, and
+    the receiver only ever sees the name.
+
+    Zip rather than tar.gz, deliberately. Taildrop moves file streams and has
+    no notion of a directory, so a folder has to be packed into a single file,
+    and that choice is really a decision about what the *receiver* can open.
+    Android handles zip far more widely than tar.gz: the platform Files app
+    offers "Extract to..." for a zip, while a tar.gz is a dead end without a
+    third-party archive manager installed.
     """
     base = os.path.basename(folder.rstrip("/")) or "folder"
     scratch = tempfile.mkdtemp(prefix="taildrop-")
-    path = os.path.join(scratch, f"{base}.tar.gz")
+    path = os.path.join(scratch, f"{base}.zip")
     try:
-        with tarfile.open(path, "w:gz") as tf:
-            tf.add(folder, arcname=base)
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # The folder itself is a top-level entry, so extracting gives back
+            # "Holiday/" rather than its contents loose in the current
+            # directory.
+            for root, dirs, names in os.walk(folder):
+                rel_root = os.path.relpath(root, folder)
+                if rel_root == ".":
+                    zf.write(root, arcname=base)
+                # Empty directories are not lost: os.walk reaches them but
+                # reports no files under them, so they would simply vanish
+                # from the archive and the extracted folder would differ from
+                # the one sent.
+                for d in dirs:
+                    full = os.path.join(root, d)
+                    zf.write(full, arcname=os.path.join(base, os.path.relpath(full, folder)))
+                for n in names:
+                    full = os.path.join(root, n)
+                    arc = os.path.join(base, os.path.relpath(full, folder))
+                    zf.write(full, arcname=arc)
     except Exception:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
@@ -587,22 +611,61 @@ class TaildropProvider(GObject.GObject, Nautilus.MenuProvider):
 
             peers = _get_peers()
             online = [p for p in peers if p["online"]]
-            _debug(f"menu: {len(online)} online of {len(peers)} known: "
-                   + (", ".join(p["name"] for p in online) or "none"))
+            offline = [p for p in peers if not p["online"]]
+            _debug(f"menu: {len(online)} online, {len(offline)} offline: "
+                   + (", ".join(p["name"] for p in peers) or "no peers known"))
 
-            if not online:
-                _debug("no online peers, returning empty menu")
-                return []
-
+            # The entry is always present.
+            #
+            # It used to vanish when nothing was online, which is
+            # indistinguishable from the extension not being installed at
+            # all. The first time it happened, the phone had dropped off the
+            # tailnet and the sensible conclusion was that Nautilus had
+            # stopped loading the file. Showing the entry with the reason
+            # inside it is the difference between "no devices right now" and
+            # "this is broken".
             submenu = Nautilus.Menu()
+
+            def add_note(label_text):
+                # Insensitive items cannot be clicked, so the menu explains
+                # itself without offering a send that cannot work.
+                item = Nautilus.MenuItem(
+                    name=f"{MENU_PREFIX}::Note::{label_text}",
+                    label=label_text)
+                try:
+                    item.set_property("sensitive", False)
+                except Exception:
+                    pass
+                submenu.append_item(item)
+
             for p in online:
                 item = Nautilus.MenuItem(
                     name=f"{MENU_PREFIX}::Send::{p['ip']}",
                     label=p["name"],
                     tip=f"Send to {p['name']} ({p['ip']})")
                 item.connect("activate", self._on_activate, selection,
-                                  p["name"], p["ip"])
+                             p["name"], p["ip"])
                 submenu.append_item(item)
+
+            # Offline devices are still sendable. Taildrop delivers through a
+            # relay and reaches a sleeping device, which is the usual case for
+            # a phone in a pocket -- the CLI says "not replying; trying anyway"
+            # and the file arrives.
+            for p in offline:
+                item = Nautilus.MenuItem(
+                    name=f"{MENU_PREFIX}::Send::{p['ip']}",
+                    label=f"{p['name']} (offline)",
+                    tip=f"Send to {p['name']} ({p['ip']}), waking it if needed")
+                item.connect("activate", self._on_activate, selection,
+                             p["name"], p["ip"])
+                submenu.append_item(item)
+
+            if not peers:
+                add_note("No Tailnet devices found")
+            elif not online and not offline:
+                add_note("No devices online")
+            elif not online:
+                add_note("Devices below are offline; sending wakes them")
 
             n = len(selection)
             top_label = LABEL if n == 1 else f"{LABEL} ({n} files)"

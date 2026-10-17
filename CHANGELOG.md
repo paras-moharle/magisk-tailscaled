@@ -1,4 +1,102 @@
+## v1.0.24
+
+### The context menu disappeared when no device was reachable
+
+The entry was hidden unless a peer was online, which is indistinguishable from
+the extension not being installed at all: the first time it happened the phone
+had dropped off the tailnet, and the sensible conclusion was that Nautilus had
+stopped loading the file. It now always appears, with the reason inside it.
+
+Offline devices are listed and sendable, marked "(offline)". Taildrop reaches a
+sleeping device through a relay, so hiding them prevented sends that worked.
+
+### Folders are sent as zip, not tar.gz
+
+Both are one file either way, so the choice is about what the receiver can
+open. Android handles zip far more widely: the Files app offers "Extract to..."
+for a zip, while a tar.gz is a dead end without a third-party archive manager.
+
+Empty directories inside a folder are preserved. `os.walk` reaches them but
+reports no files under them, so they were dropped and the extracted folder did
+not match the one sent.
+
+### The README describes what this actually does
+
+It listed what the module was rather than what it does, and omitted the
+receiver, the log, folder packing, and the troubleshooting steps that exist
+because each of those cost real time to work out.
+
+## v1.0.23
+
+### A folder arrived called `taildrop-f2dsoszy-Holiday.tar.gz`
+
+The archive was built with `tempfile.mkstemp(prefix="taildrop-")`, which puts its
+own random string in front of the name. The temporary name is where the file
+sits during the send, not what it is called, and the receiver only ever sees
+the name.
+
+Both receivers also took the extension to be whatever followed the last dot, so
+a second delivery of `photos.tar.gz` became `photos.tar-1.gz`, which is not a
+name anyone has. Compound extensions are now split as a unit, and a dotfile is
+no longer numbered into `-1.gitignore`.
+
+## v1.0.22
+
+### The released zip shipped an app that called itself the previous version
+
+build-module.sh built the APK only when one was absent, so a stale APK was
+packaged without comment. build.sh stamps the version into the app from
+module.prop, so an APK built before a version bump carries the old one: v1.0.21
+was published with an app reporting v1.0.20. The app is rebuilt on every
+package now, and the build fails if the APK's version does not match
+module.prop.
+
+### The third-party notices did not describe what ships
+
+They listed `hev-socks5-tunnel`, which this module does not use and which is
+not in the zip, left over from the module it was forked from. They did not list
+jq, which is bundled in both zips and carries its own MIT licence plus notices
+for the code it incorporates.
+
+module.prop also called the module "Magisk Tailscaled" and described it with
+Tailscale's own marketing line. Everything else in the project says Tailscaled
+Reborn.
+
+## v1.0.21
+
+### One send could deliver the same file more than once
+
+dispatch() built a de-duplicated copy of the target list and then iterated the
+original, so the copy did nothing. The addresses do arrive de-duplicated from
+currentTargets(), but that is a convention three call sites had to remember,
+and a file delivered three times cannot be undone at the receiving end.
+
+### The receiver waited in a poll loop instead of being told
+
+`tailscale file get --wait` blocks until a delivery arrives. The receiver called
+it on a five-second timer, so a send could sit uncollected for five seconds and
+a subprocess started every few seconds for the whole login session. Taking a
+destination name now uses link(2), which fails rather than clobbering.
+
+Logs went to stdout, which is also the channel `deliver()` returns its count
+on, so every arrival produced `[: <log line>: integer expected` in the journal.
+
+## v1.0.20
+
+### The desktop receiver was rewritten to watch a directory the daemon never writes to
+
+This one was introduced as a fix and broke the receiver. Linux and Android
+tailscaled disagree about Taildrop: Android's daemon writes each delivery
+straight into the download folder, Linux's holds it until somebody calls
+`tailscale file get`, and `tailscale file cp` reports success throughout.
+
+The receiver had been switched from fetching to watching `~/Downloads` on the
+assumption that both platforms behaved like Android. On Linux the daemon never
+writes there, so a send from the phone reported success and arrived nowhere.
+Fetching is restored, into a staging directory the receiver owns.
+
 ## v1.0.19
+
 
 ### The Nautilus menu built a menu and then went quiet
 
@@ -958,4 +1056,3 @@ build loudly rather than silently producing a broken binary.
 
 1.90.6 -> 1.104.1, state preserved, health warning gone, rollback and
 auto-update both exercised end to end.
-
