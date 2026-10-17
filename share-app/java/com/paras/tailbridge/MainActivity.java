@@ -6,6 +6,10 @@ package com.paras.tailbridge;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkRequest;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -54,6 +58,10 @@ public class MainActivity extends Activity {
 	private static final int REQ_PICK = 1001;
 
 	private final Handler ui = new Handler(Looper.getMainLooper());
+
+	/** Wakes the peer list when wifi or mobile data flips, so a toggle reflects
+	 *  online/offline without restarting the app. */
+	private ConnectivityManager.NetworkCallback networkCallback;
 
 	/** peer name -> ip, for every known peer, online or not. */
 	private final Map<String, String> peers = new LinkedHashMap<>();
@@ -147,6 +155,7 @@ public class MainActivity extends Activity {
 		tab(0);
 		checkRoot();
 		askNotificationPermission();
+		registerNetworkWatcher();
 	}
 
 	private static final int REQ_NOTIFY = 4242;
@@ -321,6 +330,11 @@ public class MainActivity extends Activity {
 	@Override
 	protected void onDestroy() {
 		super.onDestroy();
+			if (networkCallback != null) {
+			ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+			cm.unregisterNetworkCallback(networkCallback);
+			networkCallback = null;
+		}
 		// Worker threads post back into this Handler; anything still queued
 		// would try to touch a window that no longer exists.
 		ui.removeCallbacksAndMessages(null);
@@ -1081,6 +1095,32 @@ public class MainActivity extends Activity {
 	private static final long UPDATE_CHECK_MIN_MS = 3600_000L;
 	private long lastUpdateCheck;
 
+	/** Listen for wifi / mobile data toggling. On any change, refresh immediately
+	 * so the peer list shows online/offline without an app restart. The 5-second
+	 * poll catches slower transitions; this catches the toggle itself. */
+	private void registerNetworkWatcher() {
+		if (networkCallback != null) {
+			return;
+		}
+		ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+		if (cm == null) {
+			return;
+		}
+		NetworkRequest req = new NetworkRequest.Builder()
+				.addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+				.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+				.build();
+		networkCallback = new ConnectivityManager.NetworkCallback() {
+			@Override public void onAvailable(Network network) {
+				ui.post(MainActivity.this::manualRefresh);
+			}
+			@Override public void onLost(Network network) {
+				ui.post(MainActivity.this::manualRefresh);
+			}
+		};
+		cm.registerNetworkCallback(req, networkCallback);
+	}
+
 	private void startPolling() {
 		ui.removeCallbacks(poll);
 		ui.postDelayed(poll, POLL_MS);
@@ -1359,8 +1399,27 @@ public class MainActivity extends Activity {
 		// "offline · 4m ago" tells you whether to wait or give up. A bare
 		// "offline" is a dead end: it gives no hint of how stale it is.
 		String when = up ? "" : lastSeenLabel(p.lastSeen);
+		// How the two devices are actually talking right now.
+		//
+		// Direct means the tailnet found a path between them and the transfer
+		// runs at LAN speed. Through a DERP relay it goes via a third-party
+		// machine, which is slower and worth knowing about before sending
+		// something large -- the same send can be seconds or minutes.
+		//
+		// The relay is named, because DERP relays are region codes: "blr" is
+		// Bangalore. Knowing which one means knowing roughly how far the data
+		// is travelling.
+		String link;
+		if (p.direct) {
+			link = getString(R.string.link_direct);
+		} else if (!p.relay.isEmpty()) {
+			link = getString(R.string.link_relay, p.relay);
+		} else {
+			link = getString(R.string.link_none);
+		}
 		meta.setText(p.ip
 				+ (p.os.isEmpty() ? "" : "  ·  " + p.os)
+				+ (up ? "  ·  " + link : "")
 				+ (p.exitNode ? "  ·  " + getString(R.string.exit_node_suffix) : "")
 				+ (p.exitNodeOption && !p.exitNode
 					? "  ·  " + getString(R.string.exit_node_suffix) : "")

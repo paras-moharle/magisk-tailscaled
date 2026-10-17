@@ -92,9 +92,16 @@ final class Api {
 		final String lastSeen;
 		/** Offers itself as an exit node. */
 		final boolean exitNodeOption;
+		/** DERP relay actually carrying traffic, empty when the link is direct. */
+		final String relay;
+		/** True when peers talk to each other without a relay. */
+		final boolean direct;
+		/** The endpoint in use, e.g. "192.168.1.5:41641". Empty until connected. */
+		final String curAddr;
 
 		Peer(String name, String ip, String os, boolean exitNode, boolean online,
-				String lastSeen, boolean exitNodeOption) {
+				String lastSeen, boolean exitNodeOption, String relay,
+				boolean direct, String curAddr) {
 			this.name = name;
 			this.ip = ip;
 			this.os = os;
@@ -102,6 +109,9 @@ final class Api {
 			this.online = online;
 			this.lastSeen = lastSeen;
 			this.exitNodeOption = exitNodeOption;
+			this.relay = relay;
+			this.direct = direct;
+			this.curAddr = curAddr;
 		}
 
 	}
@@ -137,7 +147,10 @@ final class Api {
 					p.optBoolean("exitNode", false),
 					p.optBoolean("online", false),
 					p.optString("lastSeen", ""),
-					p.optBoolean("exitNodeOption", false)));
+					p.optBoolean("exitNodeOption", false),
+					p.optString("relay", ""),
+					p.optBoolean("direct", false),
+					p.optString("curAddr", "")));
 		}
 		return out;
 	}
@@ -159,8 +172,19 @@ final class Api {
 		return call("update-check");
 	}
 
+	/**
+	 * Send one file.
+	 *
+	 * <p>Budgeted separately from an ordinary read. A send is a byte transfer
+	 * to a peer that may be asleep, so it inherits neither the 30 second read
+	 * ceiling nor the short one it used to have: a photo is instant, and a
+	 * hundred megabytes over a relay is minutes. The shell side sizes its own
+	 * budget from the file and caps it, and this must be at least as generous,
+	 * because cutting this call short kills the CLI mid-transfer and leaves the
+	 * daemon's partial file behind while the app reports success.
+	 */
 	static boolean send(String peerIp, String path) throws Exception {
-		call("send", peerIp, path);
+		call(600_000, "send", peerIp, path);
 		return true;
 	}
 

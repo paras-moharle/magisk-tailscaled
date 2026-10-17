@@ -1,3 +1,16 @@
+## v1.0.25  2026-10-17
+
+- Nautilus menu no longer freezes on large folders. Packing a folder into a zip
+  happened on Nautilus main thread, freezing the file manager for as long as the
+  archive took. Staging now happens inside the detached sender process, so the
+  menu click returns immediately.
+- Peer connection status: direct vs relay. The app shows whether each peer is
+  reached directly or via a DERP relay (with region name). Fixed the API
+  reporting the home relay instead of the active relay.
+- Offline peer label. A peer that is known but unreachable now reads "offline".
+- Seamless network toggle. ConnectivityManager NetworkCallback refreshes the
+  peer list on wifi/mobile-data toggle without an app restart.
+
 ## v1.0.24
 
 ### The context menu disappeared when no device was reachable

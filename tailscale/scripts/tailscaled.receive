@@ -211,6 +211,16 @@ drain() {
 		for f in "$_dir"/*; do
 			[ -f "$f" ] || continue
 			base="$(basename "$f")"
+			# A file the daemon is still writing is named
+			# "<name>.<sender-node-id>[-n].partial". Exporting it announces a
+			# truncated transfer as though it were the file: a 140 MB folder
+			# whose send was cut off arrived as two 42 MB files with the
+			# sender's node ID in the name and a notification saying they had
+			# been received. The daemon writes the real name when the transfer
+			# completes, so these are left where they are and ignored.
+			case "$base" in
+				*.partial) continue ;;
+			esac
 			out="$(copy_out "$f")"
 			if [ -z "$out" ]; then
 				# Could not move it out. Leave it and say so once, rather

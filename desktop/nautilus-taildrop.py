@@ -59,20 +59,61 @@ from gi.repository import Gio, GLib, GObject, Nautilus  # noqa: E402
 MENU_PREFIX = "TailBridgeExtensions"
 LABEL = "Send via Taildrop"
 
-# How long one `tailscale file cp` may take. A Taildrop send of a normal file
-# completes in one or two seconds; the slow part is the daemon deciding the
-# peer is not answering, which it resolves one way or the other within a few
-# seconds. This used to be 300s per file per attempt, so a single send that
-# wedged kept its detached process alive for ten minutes, and every send during
-# that window left another one behind. These are ceilings for a stuck command,
-# not expectations.
-PER_FILE_TIMEOUT = 120
+# How long one `tailscale file cp` may take.
+#
+# This has to be sized to the file, not guessed at. It was once a flat 120s,
+# put there to stop a wedged command from leaving a detached process behind --
+# and that quietly broke every large send. A 140 MB folder arrived as two
+# 42 MB `.partial` files: `subprocess.run` hit the timeout, killed the CLI
+# mid-transfer, and the daemon left what it had written so far. The sender
+# reported success, because the CLI had exited cleanly when it was killed.
+#
+# A send is a byte transfer over a relay that may be asleep. Assume a
+# conservative throughput and give it room; the overall deadline below is what
+# actually stops a runaway, and it scales too.
+#
+# Floor covers the daemon deciding whether the peer is answering at all, which
+# costs seconds before any bytes move.
+PER_FILE_FLOOR = 120
 
-# Hard stop for one sender process, however many files it was given. The
-# sender is detached on purpose so it survives Nautilus closing, which also
-# means nothing else will ever reap it: without a deadline it is a process
-# that can outlive every reason for its own existence.
-SENDER_DEADLINE = 600
+# Throughput assumed when sizing a timeout: 100 KB/s, which is roughly a bad
+# relay to a phone that is asleep.
+#
+# This is a floor on the *allowed* time, not a prediction, and the cap matters
+# as much as the rate. Directly connected, 10 GB leaves in a couple of minutes
+# and any of these budgets is generous. Over a relay the same transfer is a
+# matter of hours, and no formula recovers that: a guessed rate either lies
+# about a small file or grants a huge one unlimited time.
+PER_FILE_MIN_RATE = 100_000
+PER_FILE_CAP = 4 * 60 * 60  # four hours, whatever the size says
+
+
+def _transfer_timeout(path):
+    """Seconds to allow for sending one file, based on its size."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return PER_FILE_FLOOR
+    if size <= 0:
+        return PER_FILE_FLOOR
+    return min(PER_FILE_CAP, max(PER_FILE_FLOOR, int(size / PER_FILE_MIN_RATE) + 60))
+
+
+# Hard stop for one sender process, however many files it was given.
+#
+# The sender is detached on purpose so it survives Nautilus closing, which also
+# means nothing else will ever reap it. This scales with the work so that a
+# genuinely large batch is not cut off, while a stuck one still ends.
+def _sender_deadline(paths):
+    total = 0
+    for p in paths:
+        try:
+            total += os.path.getsize(p)
+        except OSError:
+            pass
+    if total <= 0:
+        return 900
+    return min(PER_FILE_CAP, max(900, int(total / PER_FILE_MIN_RATE) + 300))
 
 # How long a peer list stays usable before a right-click re-queries.
 #
@@ -431,7 +472,7 @@ def _send_file(path, name, archive, done, total, peer_ip=None):
     # per send and could not have found a different answer.
     dest_ip = peer_ip
     _debug(f"using menu address {dest_ip} for {name}")
-    per_file = PER_FILE_TIMEOUT
+    per_file = _transfer_timeout(path)
 
     for attempt in (1, 2):
         if dest_ip is None:
@@ -486,26 +527,23 @@ def _send_async(files, label, peer_ip=None):
     being closed mid-send, which a daemon thread did not: the thread died with
     the interpreter and the file was lost with no report.
 
-    Staging happens here, on the main thread, where the selection has already
-    been read out of the GObject, so the child is handed plain paths and needs
-    no Nautilus at all.
+    Staging does NOT happen here. It used to, and packing a folder into a zip
+    on the main thread froze Nautilus for as long as the packing took: a 140 MB
+    folder turned the context menu into a beach ball and the file manager looked
+    hung. The selection is read out of the GObject here, on the main thread,
+    while that is legal, and the child is handed the paths; anything expensive
+    happens over there.
     """
     staged = []
     for name, uri in files:
-        try:
-            staged.append(_stage((name, uri)))
-        except Exception as exc:
-            _debug(f"staging failed for {name}: {exc!r}")
-            _notify("Taildrop: send failed", f"{name}: {exc}")
+        staged.append((name, uri, uri.startswith("file://")))
     if not staged:
         return
 
     argv = [sys.executable, os.path.abspath(__file__), "--send",
             str(peer_ip or ""), str(label)]
-    for path, archive in staged:
-        argv.append(path)
-        if archive:
-            argv.append(archive)
+    for _name, _uri, _is_local in staged:
+        argv.append(_uri)
 
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
@@ -523,70 +561,64 @@ def _send_async(files, label, peer_ip=None):
 
 
 def _send_worker_main(argv):
-    """Entry point for the detached sender process. argv: ip, label, path[, archive]..."""
+    """Entry point for the detached sender.
+
+    argv: <peer-ip> <label> <uri>...  where each uri is a file:// path that may
+    name a directory.
+
+    Staging, including packing a folder into a zip, happens here rather than in
+    the menu. Done in the menu it ran on Nautilus's main thread, and packing a
+    140 MB folder there froze the file manager for as long as it took.
+    """
     ip, label = argv[0], argv[1]
-    paths = argv[2:]
-    total = len(paths)
-    deadline = time.monotonic() + SENDER_DEADLINE
+    uris = argv[2:]
+    total = len(uris)
+
+    staged = []
+    failed = 0
+    for uri in uris:
+        name = uri.rstrip("/").rsplit("/", 1)[-1]
+        try:
+            staged.append(_stage((name, uri)))
+        except Exception as exc:
+            failed += 1
+            _debug(f"staging failed for {name}: {exc!r}")
+            _notify("Taildrop: send failed", f"{name}: {exc}")
+    if not staged:
+        return 1
+
+    paths = [p for p, _ in staged]
+    limit = _sender_deadline(paths)
+    deadline = time.monotonic() + limit
     ok = 0
-    archives = []
     try:
-        for n, item in enumerate(paths):
-            path, archive = (item, None)
-            if n % 2 == 1:
-                archive = item
-                archives.append(item)
+        for n, (path, archive) in enumerate(staged):
             if time.monotonic() > deadline:
                 _debug("sender hit its deadline; stopping early")
-                _notify("Taildrop: send stopped",
-                        f"Timed out after {SENDER_DEADLINE}s")
+                _notify("Taildrop: send stopped", f"Timed out after {limit}s")
                 break
             try:
-                if _send_file(path, label, archive, done=n // 2, total=total,
+                if _send_file(path, label, archive, done=n, total=total,
                               peer_ip=ip or None):
                     ok += 1
             except Exception as exc:
+                failed += 1
                 _debug(f"send raised for {path}: {exc!r}")
+                _notify("Taildrop: send failed",
+                        f"{os.path.basename(path)}: {exc}")
     finally:
         # A folder that never sent would otherwise leave its scratch directory
-        # behind for the session. Sent ones are removed by _send_file; this
-        # catches the rest.
-        for a in archives:
-            _discard_temp(a)
-    _debug(f"sender finished: {ok}/{total} delivered to {label}")
-    return 0 if ok == total else 1
-
-
-def _send_work(files, label, peer_ip):
-    staged = []
-    failed = 0
-    for info in files:
-        try:
-            staged.append((info, _stage(info)))
-        except Exception as exc:
-            failed += 1
-            _debug(f"staging failed for {_safe_name(info)}: {exc!r}")
-            _notify("Taildrop: send failed", f"{_safe_name(info)}: {exc}")
-    if not staged:
-        return
-
-    total = len(staged)
-    ok = 0
-    for n, (_info, (path, archive)) in enumerate(staged):
-        try:
-            if _send_file(path, label, archive, done=n, total=total,
-                        peer_ip=peer_ip):
-                ok += 1
-        except Exception as exc:
-            failed += 1
-            _debug(f"send raised for {path}: {exc!r}")
-            _notify("Taildrop: send failed",
-                    f"{os.path.basename(path)}: {exc}")
+        # behind. Sent ones are removed by _send_file; this catches the rest.
+        for _p, archive in staged:
+            if archive:
+                _discard_temp(archive)
 
     if ok == total and not failed:
         _notify("Taildrop", f"Sent {total} file(s) → {label}")
     else:
-        _notify("Taildrop", f"Sent {ok}/{total + failed} file(s) → {label}")
+        _notify("Taildrop", f"Sent {ok}/{total} file(s) → {label}")
+    _debug(f"sender finished: {ok}/{total} delivered to {label}")
+    return 0 if ok == total and not failed else 1
 
 
 # -------------------------------------------------------------------- Nautilus

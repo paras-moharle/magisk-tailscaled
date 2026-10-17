@@ -13,6 +13,10 @@
 -->
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+	<!-- NetworkCallback triggers an immediate refresh on wifi/data toggle so the
+		peer list shows online/offline without an app restart. -->
+	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
 	<!--
   Package visibility (API 30+). Without this, getLaunchIntentForPackage() returns
   null for every root manager and the "grant root permission" gate silently

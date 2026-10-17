@@ -185,6 +185,13 @@ deliver() {
     _got=0
     for _staged in "$STAGING"/*; do
         [ -f "$_staged" ] || continue
+        # A transfer the daemon has not finished writing is named
+        # "<name>.<sender-node-id>[-n].partial". Claiming it announces a
+        # truncated send as though it were the file. The daemon writes the real
+        # name when the transfer completes, so these are left alone.
+        case "${_staged##*/}" in
+            *.partial) continue ;;
+        esac
         if _target="$(claim_path "$_staged")" && [ -n "$_target" ]; then
             _got=$((_got + 1))
             log "collected: ${_staged##*/} -> $_target"

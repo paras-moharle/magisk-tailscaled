@@ -4,7 +4,7 @@ Tailscale on a rooted Android phone: the daemon built from upstream, kept up to
 date on its own, with a companion app for sending files and a desktop
 integration for the other direction.
 
-[![module](https://img.shields.io/badge/module-v1.0.24-4ea1ff)](module.prop)
+[![module](https://img.shields.io/badge/module-v1.0.25-4ea1ff)](module.prop)
 [![tailscale](https://img.shields.io/badge/tailscale-1.104.1-3ddc84)](https://tailscale.com)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-a78bfa)](LICENSE)
 
@@ -28,8 +28,8 @@ integration for the other direction.
 
 ## Install
 
-1. Download **`Tailscaled-Reborn-v1.0.24-full.zip`** from
-   [releases](../../releases).
+1. Download **`Tailscaled-Reborn-v1.0.25-full.zip`** from
+   [the releases page](https://github.com/paras-moharle/tailscaled-reborn/releases).
 2. **Magisk / KernelSU → Modules → Install from storage.**
 3. Reboot.
 4. Open **TailBridge** → **System → Sign in**.
@@ -95,9 +95,17 @@ the entire time without delivering anything. The receiver does that, then
 moves each file into `Downloads/Tailscale`.
 
 ```sh
-install -Dm755 desktop/taildrop-receiver ~/.local/bin/taildrop-receiver
-install -Dm644 desktop/taildrop-receiver.service \
-                ~/.config/systemd/user/taildrop-receiver.service
+curl -Lo ~/.local/bin/taildrop-receiver \
+  https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/desktop/taildrop-receiver
+chmod +x ~/.local/bin/taildrop-receiver
+
+curl -Lo ~/.config/systemd/user/taildrop-receiver.service \
+  https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/desktop/taildrop-receiver.service
+mkdir -p ~/.config/systemd/user
+mv ~/.config/systemd/user/taildrop-receiver.service \
+   ~/.config/systemd/user/taildrop-receiver.service 2>/dev/null || true
+
+systemctl --user daemon-reload
 systemctl --user enable --now taildrop-receiver.service
 ```
 
@@ -106,13 +114,25 @@ never touches your other downloads. Names are taken atomically, so two
 arrivals that want the same name cannot collide.
 
 **Omarchy already ships a receiver.** Two collectors watching the same place
-race for the same file. To keep this one:
+race for the same file. Before enabling this one, stop whatever is already
+collecting:
 
 ```sh
-systemctl --user disable --now omarchy-tailscale-receive.service
+# Disable any tailscale file-receiver service that is currently active.
+# Omarchy's is `omarchy-tailscale-receive.service`; the loop below catches
+# anything with that pattern and turns it off too, so a future distro
+# variant does not silently steal arrivals from this receiver.
+for svc in $(systemctl --user list-unit-files \
+             --value --type=service --state=enabled \
+             2>/dev/null | grep 'tailscale.*receive' || true); do
+  systemctl --user disable --now "$svc" 2>/dev/null && \
+    echo "disabled $svc"
+done
+
+systemctl --user enable --now taildrop-receiver.service
 ```
 
-To see what is running: `pgrep -af 'taildrop|omarchy-tailscale'`.
+To see what is running afterwards: `pgrep -af 'taildrop|omarchy-tailscale'`.
 
 **On macOS and Windows** the official Tailscale app already does this.
 
@@ -121,8 +141,9 @@ To see what is running: `pgrep -af 'taildrop|omarchy-tailscale'`.
 ## Nautilus extension
 
 ```sh
-install -Dm644 desktop/nautilus-taildrop.py \
-                ~/.local/share/nautilus-python/extensions/taildrop.py
+curl -Lo ~/.local/share/nautilus-python/extensions/taildrop.py \
+  https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/desktop/nautilus-taildrop.py
+mkdir -p ~/.local/share/nautilus-python/extensions
 nautilus -q
 ```
 
@@ -158,9 +179,14 @@ different version from the module.
 
 ## Troubleshooting
 
-**The daemon will not start.** `adb shell su -c '/data/adb/tailscale/scripts/tailscaled.service status'`
-reports backend, login state and installed version; the same script takes
-`log daemon` to follow the log, and `help` lists the rest.
+**The daemon will not start.** From a terminal on the phone (or `adb shell` with
+root), run `tailscaled.service status` — it reports backend, login state and
+installed version. The same script takes `log daemon` to follow the log, and
+`help` lists the rest.
+
+```sh
+/data/adb/tailscale/scripts/tailscaled.service status
+```
 
 **A send says it worked and nothing arrives.** `tailscale file cp` reports
 success on some failures. On the phone, check `/data/adb/tailscale/run/runs.log`;
@@ -184,7 +210,8 @@ the module, and has to be granted it once.
 - **Magisk / libsu** (topjohnwu), **KernelSU** (tiann),
   **[jq](https://github.com/jqlang/jq)**.
 
-Not affiliated with Tailscale Inc. BSD 3-Clause — [LICENSE](LICENSE).
-Binaries carried in the zip are covered by
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Full history:
-[CHANGELOG.md](CHANGELOG.md).
+Not affiliated with Tailscale Inc.
+
+This project is BSD 3-Clause licensed — see [LICENSE](LICENSE).
+Binaries carried in the zip are covered by [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Full release history: [CHANGELOG.md](CHANGELOG.md).

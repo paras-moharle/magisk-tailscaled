@@ -101,6 +101,10 @@
 	<string name="receive_files_sub">Move what Taildrop received into Downloads/Tailscale</string>
 	<string name="received_n">Received %1$d file(s)</string>
 	<string name="update_check_hint">Look for a newer tailscaled</string>
+	<string name="link_direct">direct</string>
+	<string name="link_relay">relay %1$s</string>
+	<string name="link_offline">offline — connect to internet</string>
+	<string name="link_none">not connected</string>
 	<string name="up_to_date">Already on the latest version (%1$s)</string>
 	<string name="installing_update">Installing tailscaled %1$s\u2026</string>
 	<string name="update_done">Updated %1$s to %2$s</string>

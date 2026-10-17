@@ -154,7 +154,13 @@ api_status() {
 	              end),
 	      os: ($s.Self.OS // ""),
 	      online: ($s.Self.Online // false),
-	      relay: ($s.Self.Relay // ""),
+	      # PeerRelay, not Relay. Relay is the home DERP relay for the
+	      # node and is set even on a perfectly direct connection, so
+	      # reporting it said "blr" while the CLI said "direct".
+	      # PeerRelay is the relay actually in use, empty when direct.
+	      relay: ($s.Self.PeerRelay // ""),
+	      direct: ((($s.Self.PeerRelay // "") == "") and ($s.Self.Online // false)),
+	      curAddr: ($s.Self.CurAddr // ""),
 	      tailscaleIPs: arr($s.Self.TailscaleIPs),
 	      addrs: arr($s.Self.Addrs),
 	      exitNodeOption: ($s.Self.ExitNodeOption // false),
@@ -190,12 +196,14 @@ api_status() {
 	        host: (.HostName // ""),
 	        os: (.OS // ""),
 	        online: (.Online // false),
-	        relay: (.Relay // ""),
+	        relay: (.PeerRelay // ""),
 	        ips: arr(.TailscaleIPs),
 	        rx: (.RxBytes // 0),
 	        tx: (.TxBytes // 0),
 	        lastSeen: (.LastSeen // ""),
         direct: ((.PeerRelay // "") == "" and (.Online // false)),
+        curAddr: (.CurAddr // ""),
+        active: (.Active // false),
 	        exitNode: (.ExitNodeOption // false),
 	        active: (.Active // false),
 	        tags: arr(.Tags)
@@ -439,7 +447,21 @@ api_send() {
 	# So the exit code is not taken as proof. Success requires positive
 	# confirmation that the CLI claimed the file was sent.
 	set +e
-	_out="$(timeout 300 "$TS_CLI" file cp "$_path" "$_dest" 2>&1)"
+	# Sized to the file. A flat timeout truncates large sends: killing the CLI
+	# mid-transfer leaves the daemon's partial file behind, the CLI exits
+	# cleanly, and the sender is told it worked. 300s was enough for a photo and
+	# nowhere near enough for a folder.
+	_size="$(wc -c < "$_path" 2>/dev/null || echo 0)"
+	case "$_size" in '' | *[!0-9]*) _size=0 ;; esac
+	# Same reasoning as the desktop sender: a floor of 300s, scaled by size at
+	# a pessimistic 100 KB/s, and capped so a huge file cannot hold the API open
+	# indefinitely. Directly connected, a gigabyte goes in seconds.
+	_timeout=300
+	if [ "$_size" -gt 40000000 ]; then
+		_timeout=$(( _size / 100000 + 300 ))
+		[ "$_timeout" -gt 14400 ] && _timeout=14400
+	fi
+	_out="$(timeout "$_timeout" "$TS_CLI" file cp "$_path" "$_dest" 2>&1)"
 	_rc=$?
 	set -e
 
