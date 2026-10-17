@@ -144,8 +144,19 @@ final class Api {
 
 	/** Latest published version. Slow: touches the network. */
 	static String updateCheck() throws Exception {
-		JSONObject u = call("update-check");
-		return u.optString("latest", "");
+		return updateCheckInfo().optString("latest", "");
+	}
+
+	/**
+	 * The whole answer from the feed: current, latest, and whether they differ.
+	 *
+	 * <p>Tapping "check" needs all three. Asking only for the latest version
+	 * cannot tell "you are up to date" from "we could not reach the feed",
+	 * which is how the update row used to end up promising an install that had
+	 * nothing to install.
+	 */
+	static JSONObject updateCheckInfo() throws Exception {
+		return call("update-check");
 	}
 
 	static boolean send(String peerIp, String path) throws Exception {

@@ -48,7 +48,7 @@ DROP_DIR="${TS_DROP_DIR:-/sdcard/Download/Taildrop}"
 # receiver was not running was, on the next start, simply part of the listing
 # and therefore old -- so it was never announced. A restart silently swallowed
 # every delivery that landed during it. This file is the memory that stops that.
-SEEN_FILE="${TS_RUN_DIR}/seen.list"
+_STUCK_FILE="${TS_RUN_DIR}/stuck.list"
 PIDFILE="${TS_RUN_DIR}/receive.pid"
 NOTIFY_CHANNEL="taildrop"
 
@@ -87,30 +87,48 @@ notify() {
 }
 
 copy_out() {
-	# $1 = received file. Keep the inbox copy (tailscale will not overwrite an
-	# existing name) and place a readable copy in Downloads.
+	# $1 = received file. Move it out of where it was delivered and into DEST.
+	#
+	# A move, not a copy, and that is the point. Leaving the delivered file in
+	# place is what let stale files pile up in the delivery folder for ever --
+	# and because the daemon refuses to overwrite a name that already exists
+	# there, a leftover did not merely go unannounced, it blocked every later
+	# delivery of that same filename from ever arriving. Both directories are
+	# on the same filesystem, so this is a rename.
 	[ -f "$1" ] || return 1
 	name="$(basename "$1")"
-	if mkdir -p "$DEST" 2>/dev/null; then
-		target="${DEST}/${name}"
-		# --conflict=rename already guarantees a free name in the inbox, but the
-		# destination may hold a file the user has since moved or edited. That
-		# one must never be clobbered.
-		if [ -e "$target" ]; then
-			stem="${name%.*}"
-			ext=""
-			case "$name" in
-				*.*) ext=".${name##*.}" ;;
-			esac
-			n=1
-			while [ -e "${DEST}/${stem}-${n}${ext}" ]; do
-				n=$((n + 1))
-			done
-			target="${DEST}/${stem}-${n}${ext}"
-		fi
-		cp -f "$1" "$target" 2>/dev/null && log_line "exported ${target}"
-		echo "$target"
+	mkdir -p "$DEST" 2>/dev/null || return 1
+	target="${DEST}/${name}"
+	# The destination may hold a file the user has since moved or edited. That
+	# one must never be clobbered.
+	if [ -e "$target" ]; then
+		stem="${name%.*}"
+		ext=""
+		case "$name" in
+			*.*) ext=".${name##*.}" ;;
+		esac
+		n=1
+		while [ -e "${DEST}/${stem}-${n}${ext}" ]; do
+			n=$((n + 1))
+		done
+		target="${DEST}/${stem}-${n}${ext}"
 	fi
+	mv -f "$1" "$target" 2>/dev/null || return 1
+	log_line "exported ${target}"
+	echo "$target"
+}
+
+# A file we could not move out. Said once, not once per poll.
+note_stuck() {
+	_f="$1"
+	_k="$_STUCK_FILE	$(basename "$_f")"
+	if [ -f "$_STUCK_FILE" ] &&
+		printf '%s\n' "$_k" | grep -Fxq -f "$_STUCK_FILE" 2>/dev/null; then
+		return 0
+	fi
+	printf '%s\n' "$_k" >> "$_STUCK_FILE" 2>/dev/null || true
+	log_line "could not export $(basename "$_f"); still in $(dirname "$_f")"
+	notify 1 "$(basename "$_f")" ""
 }
 
 drain() {
@@ -125,29 +143,13 @@ drain() {
 	#
 	# Neither is a queue: the pull does not remove what it copied, and the
 	# daemon leaves what it delivered. So each directory is snapshotted first and
-	# only names that were not already present count as new arrivals --
-	# otherwise every poll re-announces every file ever received, which is how a
-	# delivery alert becomes noise nobody reads.
+	# No seen-list is needed, and keeping one is what broke resending: see the
+	# comment on sweep(). A file is unhandled exactly while it is still in the
+	# directory, and this loop moves it out.
 	mkdir -p "$INBOX" 2>/dev/null
 	chmod 0700 "$INBOX" 2>/dev/null
 
-	# First ever run: adopt whatever is already on disk as seen, so installing
-	# the module does not announce every file the daemon delivered beforehand.
-	if [ ! -f "$SEEN_FILE" ]; then
-		: > "$SEEN_FILE" 2>/dev/null || true
-		for d in "$INBOX" "$DROP_DIR"; do
-			[ -d "$d" ] || continue
-			for f in "$d"/*; do
-				[ -f "$f" ] || continue
-				printf '%s\t%s\n' "$d" "$(basename "$f")" >> "$SEEN_FILE" 2>/dev/null
-			done
-		done
-	fi
-
-	before_inbox="$(ls -1 "$INBOX" 2>/dev/null)"
-	before_drop=""
 	if [ -d "$DROP_DIR" ]; then
-		before_drop="$(ls -1 "$DROP_DIR" 2>/dev/null)"
 		# Daemon-owned: only we may write here.
 		chmod 0771 "$DROP_DIR" 2>/dev/null
 	fi
@@ -160,52 +162,51 @@ drain() {
 	first=""
 	count=0
 
-	# $1 = directory, $2 = pre-pull listing of that directory.
+	# $1 = directory.
+	#
+	# Presence in the directory is the whole test. This receiver moves each
+	# file out as it exports it, so anything still sitting here has not been
+	# delivered yet, and there is nothing else to decide.
+	#
+	# It used to keep a seen-list of names already handled, and that was
+	# wrong in three separate ways:
+	#
+	#   - keyed on the name, so every later delivery of a filename that had
+	#     been seen once was skipped forever. Sending the same file twice
+	#     simply stopped working: the daemon delivered it, the receiver
+	#     ignored it, and it sat in the folder with no export and no alert.
+	#   - a snapshot taken per cycle misses anything that arrived between one
+	#     sweep and the next cycle's snapshot, which is every arrival, always.
+	#   - adding size and mtime did not fix it either, because re-sending the
+	#     same file produces the same bytes with the same timestamp. The file
+	#     was genuinely new and was still called "already seen".
+	#
+	# The daemon will not overwrite a name that is already present in the
+	# delivery folder; it holds the file until the name is free. So a file
+	# left behind there does not merely go unannounced, it also blocks the
+	# next delivery of that name from ever arriving.
 	sweep() {
 		_dir="$1"
-		_before="$2"
 		[ -d "$_dir" ] || return 0
 		for f in "$_dir"/*; do
 			[ -f "$f" ] || continue
 			base="$(basename "$f")"
-			# Exact-line match against the snapshot. Done with grep -x rather
-			# than a `case` on embedded newlines: that form did not match under
-			# Android's shell, which silently turned every arrival into
-			# "already seen".
-			# Two different "have I seen this" tests, because the two directories
-			# behave differently.
-			#
-			# The inbox is filled by `file get` *during* this cycle, so a snapshot
-			# taken before that pull is a correct baseline.
-			#
-			# DROP_DIR is filled asynchronously by the daemon. A per-cycle
-			# snapshot there skips every arrival that landed between one cycle's
-			# sweep and the next cycle's snapshot -- always, silently. Only the
-			# persistent list can decide, so that is the only test applied to it.
-			if [ "$_dir" = "$INBOX" ] && [ -n "$_before" ] &&
-				printf '%s\n' "$_before" | grep -Fxq -- "$base"; then
+			out="$(copy_out "$f")"
+			if [ -z "$out" ]; then
+				# Could not move it out. Leave it and say so once, rather
+				# than repeating the same complaint every few seconds.
+				note_stuck "$f"
 				continue
 			fi
-			if [ -f "$SEEN_FILE" ] &&
-				printf '%s\t%s\n' "$_dir" "$base" | grep -Fxq -f "$SEEN_FILE" 2>/dev/null; then
-				continue
-			fi
-			printf '%s\t%s\n' "$_dir" "$base" >> "$SEEN_FILE" 2>/dev/null || true
 			count=$((count + 1))
 			names="${names}${names:+, }$base"
-			out="$(copy_out "$f")"
-			if [ -n "$out" ]; then
-				exported="${exported}${exported:+, }$(basename "$out")"
-				[ -n "$first" ] || first="$out"
-				# Drop the inbox copy once the export is confirmed. The delivery
-				# folder is left alone: it belongs to the daemon, not to us.
-				[ "$_dir" = "$INBOX" ] && rm -f "$f" 2>/dev/null
-			fi
+			exported="${exported}${exported:+, }$(basename "$out")"
+			[ -n "$first" ] || first="$out"
 		done
 	}
 
-	sweep "$INBOX" "$before_inbox"
-	sweep "$DROP_DIR" "$before_drop"
+	sweep "$INBOX"
+	sweep "$DROP_DIR"
 
 	if [ "$count" -gt 0 ]; then
 		log_line "received ${count}: ${names}"

@@ -277,10 +277,17 @@ api_update_check() {
 	need_cli
 	_cur="$(current_version 2>/dev/null || true)"
 	if _lv="$(latest_version 2>/dev/null)" && [ -n "$_lv" ]; then
+		# A real JSON boolean, not the string "false". This used to quote it,
+		# so the field's type depended on which reader looked at it: Java's
+		# optBoolean happens to parse the string, but a shell or jq consumer
+		# testing `.available == false` would compare a string to a boolean
+		# and quietly get the wrong answer.
+		_avail=false
+		version_is_newer "${_cur:-0}" "$_lv" && _avail=true
 		printf '{"ok":true,"current":%s,"latest":%s,"available":%s,"source":"feed"}\n' \
 			"$("$JQ" -Rn --arg c "$_cur" '$c')" \
 			"$("$JQ" -Rn --arg l "$_lv" '$l')" \
-			"$("$JQ" -Rn --arg a "$(version_is_newer "${_cur:-0}" "$_lv" && echo true || echo false)" '$a')"
+			"$_avail"
 		return 0
 	fi
 	_out="$(timeout 60 "$TS_CLI" update --dry-run 2>&1)" || true
@@ -303,8 +310,16 @@ api_update_check() {
 				-e 's/.*version \([0-9][0-9.]*\) is.*/\1/p' \
 			| head -1)"
 		[ -n "$_lv2" ] || _lv2="$_cur"
-		printf '{"ok":true,"current":%s,"latest":%s,"available":true,"source":"binary"}\n' \
-			"$("$JQ" -Rn --arg c "$_cur" '$c')" "$("$JQ" -Rn --arg l "$_lv2" '$l')"
+		# `available` must mean what the feed path means by it: latest is
+		# genuinely newer than what is running. This branch used to hardcode
+		# true, so a dry-run that reported the version already installed came
+		# back as "an update is available" with latest == current. Callers that
+		# trusted the flag alone offered an install of the same binary.
+		_avail2=false
+		[ "$_lv2" != "$_cur" ] && version_is_newer "${_cur:-0}" "$_lv2" && _avail2=true
+		printf '{"ok":true,"current":%s,"latest":%s,"available":%s,"source":"binary"}\n' \
+			"$("$JQ" -Rn --arg c "$_cur" '$c')" "$("$JQ" -Rn --arg l "$_lv2" '$l')" \
+			"$_avail2"
 		;;
 	esac
 }
@@ -442,8 +457,22 @@ api_send() {
 	_failed=no
 	if [ "$_rc" -ne 0 ]; then
 		_failed=yes
-	elif printf '%s' "$_out" | grep -qE 'Bad Gateway|unknown target|not in your Tailnet|error|failed'; then
-		_failed=yes
+	else
+		# stderr is read, but a warning is not an error. A peer that has been
+		# idle makes the CLI print
+		#     # warning: 100.76.39.7 is not replying; trying anyway
+		# and then deliver the file anyway over a relay. The Nautilus
+		# extension was rewritten for exactly this and reported delivered
+		# files as failures while the phone was asleep.
+		#
+		# So: anything that is not a diagnostic line and not a warning counts
+		# as failure, rather than a fixed list of words being required to
+		# catch one. An unfamiliar failure cannot slip through as success.
+		if printf '%s\n' "$_out" | tr -d '\r' |
+			grep -viE '#|warning' |
+			grep -qE '[[:alnum:]]'; then
+			_failed=yes
+		fi
 	fi
 
 	if [ "$_failed" = "yes" ]; then
@@ -520,8 +549,52 @@ api_service() {
 }
 
 api_update() {
+	#
+	# Report what actually happened.
+	#
+	# This used to discard the updater's output and `|| true` its exit status,
+	# then return a plain status. The app therefore said "Done" after a failed
+	# download exactly as it did after a successful install, which is the one
+	# thing a user cannot forgive: they were told their daemon was updated while
+	# it had not been.
+	#
+	# The updater records the outcome in run/update.state (`ok-<version>`,
+	# `failed-update`, `rolled-back`), so read that and compare the binary's
+	# version either side of the run. Both are needed: state says whether it
+	# worked, the version pair says whether anything actually changed.
+	#
+	_before="$(current_version)"
 	timeout 900 "${TS_SCRIPTS_DIR}/tailscaled.update" run >/dev/null 2>&1 || true
-	api_status
+	_after="$(current_version)"
+	_state="$(cat "${TS_RUN_DIR}/update.state" 2>/dev/null || echo unknown)"
+
+	_b="$("$JQ" -Rn --arg v "${_before:-unknown}" '$v')"
+	_a="$("$JQ" -Rn --arg v "${_after:-unknown}" '$v')"
+	_s="$("$JQ" -Rn --arg v "${_state:-unknown}" '$v')"
+
+	case "$_state" in
+		failed-update | rolled-back)
+			_reason="$(grep -m1 -i 'Error' "${TS_RUN_DIR}/runs.log" 2>/dev/null |
+				tail -1 | sed 's/^.*\[Error\]: *//')"
+			[ -n "$_reason" ] || _reason="the updater reported ${_state}"
+			printf '{"ok":false,"error":%s,"before":%s,"after":%s,"state":%s}\n' \
+				"$("$JQ" -Rn --arg e "$_reason" '$e')" "$_b" "$_a" "$_s"
+			;;
+		ok-*)
+			if [ "$_before" = "$_after" ]; then
+				printf '{"ok":true,"updated":false,"before":%s,"after":%s,"state":%s}\n' \
+					"$_b" "$_a" "$_s"
+			else
+				printf '{"ok":true,"updated":true,"before":%s,"after":%s,"state":%s}\n' \
+					"$_b" "$_a" "$_s"
+			fi
+			;;
+		*)
+			# No usable state: do not claim a result that was never recorded.
+			printf '{"ok":false,"error":"the updater did not report an outcome","before":%s,"after":%s,"state":%s}\n' \
+				"$_b" "$_a" "$_s"
+			;;
+	esac
 }
 
 api_version() {

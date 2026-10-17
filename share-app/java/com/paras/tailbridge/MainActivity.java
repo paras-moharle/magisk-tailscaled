@@ -1899,14 +1899,57 @@ public class MainActivity extends Activity {
 		}).start();
 	}
 
+	/**
+	 * The update row: find out what is available, then act on it.
+	 *
+	 * <p>Previously this ran the updater and then said "Done" whatever happened.
+	 * A failed download produced the same "Done" as a successful install, and
+	 * the user was told their daemon had been updated while it had not. The
+	 * daemon's log showed "Could not obtain the new binary; keeping 1.104.1" at
+	 * the same moment the app claimed success.
+	 *
+	 * <p>So: ask the feed first. If the running version is already the latest,
+	 * say so and stop -- restarting a daemon and downloading a binary to change
+	 * nothing is not an update. If there is something newer, install it and
+	 * report the version it moved to, or the reason it did not move.
+	 */
 	private void updateNow() {
 		toast(getString(R.string.checking));
 		new Thread(() -> {
 			try {
-				Api.update();
-				latestVersion = "";
+				final JSONObject info = Api.updateCheckInfo();
+				final String cur = info.optString("current", "");
+				final String latest = info.optString("latest", "");
+				final boolean available = info.optBoolean("available", false)
+						&& !latest.isEmpty() && !latest.equals(cur);
+
+				if (!available) {
+					// Say which of the two it is. A reachable feed with no
+					// newer build and an unreachable feed both come back
+					// without "available", and claiming "up to date" on a
+					// failed check would be inventing knowledge.
+					final boolean knowLatest = !latest.isEmpty() && !latest.equals(cur);
+					ui.post(() -> {
+						latestVersion = "";
+						paintUpdateRow();
+						toast(knowLatest
+								? getString(R.string.up_to_date, cur.isEmpty() ? latest : cur)
+								: getString(R.string.update_unchanged,
+										cur.isEmpty() ? "?" : cur));
+						refresh();
+					});
+					return;
+				}
+
+				ui.post(() -> toast(getString(R.string.installing_update, latest)));
+				final JSONObject res = Api.update();
+				final boolean moved = res.optBoolean("updated", false);
+				final String after = res.optString("after", cur);
 				ui.post(() -> {
-					toast(getString(R.string.done));
+					latestVersion = "";
+					toast(moved
+							? getString(R.string.update_done, cur, after)
+							: getString(R.string.update_unchanged, after));
 					refresh();
 				});
 			} catch (Exception e) {

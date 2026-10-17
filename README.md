@@ -3,7 +3,7 @@
 Tailscale on a rooted Android phone, with the daemon built from upstream and
 updated automatically.
 
-[![module](https://img.shields.io/badge/module-v1.0.17-4ea1ff)](module.prop)
+[![module](https://img.shields.io/badge/module-v1.0.19-4ea1ff)](module.prop)
 [![tailscale](https://img.shields.io/badge/tailscale-1.104.1-3ddc84)](https://tailscale.com)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-a78bfa)](LICENSE)
 
@@ -11,7 +11,7 @@ updated automatically.
 
 ## Install
 
-1. Download **`Tailscaled-Reborn-v1.0.17-full.zip`** from
+1. Download **`Tailscaled-Reborn-v1.0.19-full.zip`** from
    [releases](../../releases).
 2. **Magisk / KernelSU → Modules → Install from storage.**
 3. Reboot.
@@ -33,7 +33,9 @@ fails on devices with no HTTPS-capable `wget`.
 straight from any app: sharing a file and choosing TailBridge opens a device
 picker immediately.
 
-**From your desktop** — GNOME Files: right-click → *Send via Taildrop*.
+**From your desktop** — GNOME Files: right-click → *Send via Taildrop*. The
+send runs in a detached process, so it survives closing the file manager and
+does not queue behind it.
 
 ---
 
@@ -42,8 +44,10 @@ picker immediately.
 Files land in `Downloads/Tailscale` and raise a notification with an *Open*
 action. Nothing to tap on the phone.
 
-**On Linux**, something has to pull them — the Tailscale CLI cannot receive by
-itself, and the GUI clients that do this ship only for macOS and Windows:
+**On Linux**, something has to collect them. The daemon drops them in your
+downloads directory; `tailscale file get` returns success and collects nothing.
+The receiver watches that directory and takes only files that appeared since it
+last looked, so it never touches your own downloads:
 
 ```sh
 install -Dm755 desktop/taildrop-receiver ~/.local/bin/taildrop-receiver
@@ -53,6 +57,11 @@ systemctl --user enable --now taildrop-receiver.service
 ```
 
 **On macOS and Windows** the official Tailscale app already does this.
+
+> **Already have one?** Omarchy ships its own receiver
+> (`/usr/bin/omarchy-tailscale-receive`). Two collectors watching the same
+> directory will race for the same file, so use one or the other. To see which
+> is running: `pgrep -af 'taildrop|omarchy-tailscale'`.
 
 ---
 
@@ -66,6 +75,10 @@ nautilus -q
 
 `nautilus -q` is required — Nautilus loads extensions once at startup, so an
 edited file will not be running until it restarts.
+
+It writes `~/.cache/taildrop-nautilus.log` on every menu open and every send:
+the selection, the peers it found, and the result. That is how a send that
+fails gets diagnosed instead of guessed at.
 
 ---
 

@@ -1,3 +1,143 @@
+## v1.0.19
+
+### The Nautilus menu built a menu and then went quiet
+
+Three separate faults sat between "Send via Taildrop" appearing and a file
+arriving, and each one had to be found before the next was visible.
+
+**A GObject was read from a background thread.** The sender called
+`fileinfo.get_uri()` on a `Nautilus.FileInfo` after the click. That is a
+GObject call off the main thread, and it did not raise: it blocked. Every send
+stopped dead at the same log line, with no error and no notification. The
+selection is now read on the main thread while the menu is built, and the
+sender receives plain strings.
+
+**A thread could not run anyway.** Even without that, CPython will not schedule
+a background thread while Nautilus's GTK main loop holds the GIL. Measured:
+a click at 20:31:32 did not reach `tailscale file cp` until 20:31:52, with an
+empty loop in between. The send now runs in a detached process, which has its
+own GIL, is not scheduled around anything Nautilus does, and survives the file
+manager being closed mid-send. A daemon thread died with the interpreter and
+the file was lost unreported.
+
+**A delivered file was reported as a failure.** The check was
+`rc == 0 and stderr empty`. `tailscale file cp` exits 0 when it delivers and
+writes a warning to stderr when the phone has been idle --
+`# warning: ... is not replying; trying anyway` -- then delivers over a relay.
+So "Sent 0/1" for files that had already arrived, and because the warning only
+appears when the phone is asleep, sending looked broken at random. The exit
+status is authoritative now; stderr is read only for lines that are not a
+warning. The app's own send path had the same assumption in the form of a
+fixed list of error words, and now uses the same rule.
+
+### Sending a folder killed the sender thread
+
+`_stage` returned the user's own folder as the thing to delete once the send
+succeeded, so a successful folder send ended in `os.unlink()` on a directory:
+IsADirectoryError, thread dead, no file, no notification. It returns the
+tarball it made now, and the sender body is wrapped whole.
+
+### Resending the same file stopped working entirely
+
+Four faults stacked. A seen-list keyed on filename meant that once a name had
+been seen, every later delivery of it was skipped forever. The receiver copied
+files out instead of moving them, so they piled up in the delivery folder
+permanently. The daemon does not overwrite a name that is already there, it
+holds the file -- so a leftover did not merely go unannounced, it blocked every
+later delivery of that name. Adding size and mtime did not help, because
+re-sending the same file produces the same bytes with the same timestamp.
+
+The seen-list is gone. A file is unhandled exactly while it is still in the
+delivery folder, and the receiver moves it out, so presence is the whole test
+and there is no bookkeeping to get wrong. The backlog this had been hiding was
+flushed on the first sweep: eleven files, including one sent hours earlier that
+had never arrived and had been written off as lost.
+
+### The update said "Done" when the update had failed
+
+`api_update` ran the updater with `|| true`, discarded its output, and returned
+a plain status, so a failed download produced the same "Done" as a successful
+install. It reports the version either side of the run and the state the
+updater recorded, and fails with the reason when it did not succeed. The row
+checks first and says so when there is nothing to do, instead of downloading a
+binary and restarting a daemon to change nothing.
+
+### The desktop receiver watched a directory that never fills
+
+It looped on `tailscale file get`, which returns success and collects nothing
+on a current daemon -- which is how `proof.txt` came to sit in `~/Downloads/`
+unclaimed. It now watches the download directory the daemon actually writes to,
+and collects only files that appeared since it last looked, so it never moves
+your own downloads. The first run adopts what is already there.
+
+### Not leaking
+
+The detached sender is nobody's reaper, so it bounds itself: 120s per file
+instead of 300s per attempt, a ten minute ceiling for a whole send, and temp
+archives removed on every exit path including the timeout. Six back-to-back
+sends leave no orphaned process and no file in `/tmp`.
+
+### The extension had no diagnostics at all
+
+It logged only under `NAUTILUS_DEBUG=1`, which the process that matters never
+has, so nothing recorded whether a menu was built or a click arrived. It now
+always writes `~/.cache/taildrop-nautilus.log`, size-capped, with the
+selection, the peers found, and the result of each send.
+
+## v1.0.18
+
+### Nautilus: a delivered file was reported as a failure
+
+The send checked `rc == 0 and stderr empty`. `tailscale file cp` exits 0 when
+it delivers, and it writes a warning to stderr when the receiving device has
+been idle:
+
+    # warning: 100.76.39.7 is not replying; trying anyway
+
+and then delivers the file anyway, over a relay. The check called that a
+failure. The extension reported "Sent 0/1" for transfers that had already
+arrived on the phone, and because the warning only appears when the phone has
+been asleep, the same file from the same machine failed or succeeded at
+random. That is what "sending is broken" actually was.
+
+The exit status is now authoritative: non-zero means it could not deliver, and
+it always is when it cannot ("can't send to ...: unknown target"). stderr is
+still read, but only for lines that are not a warning, so an error printed
+alongside a zero exit is not quietly accepted.
+
+### Nautilus: sending a folder killed the sender thread
+
+`_stage` returned the user's own folder as the thing to delete once the send
+succeeded, so a successful folder send ended in `os.unlink()` on a directory:
+IsADirectoryError, thread dead, no file, no notification, nothing in any log.
+It now returns the tarball it made. The sender body is also wrapped whole, so
+nothing can take the thread down silently again.
+
+### Nautilus: the extension had no diagnostics at all
+
+It logged only when `NAUTILUS_DEBUG=1`, and Nautilus is started from the
+desktop session where that variable is never set, so the file that matters
+produced no output. Every report of it being fragile was unanswerable because
+nothing recorded whether the menu was built, which peers it listed, or whether
+a click arrived. It now always appends to `~/.cache/taildrop-nautilus.log`,
+size-capped, with every failure to write swallowed.
+
+### The update said "Done" when the update had failed
+
+`api_update` ran the updater with `|| true`, discarded its output and returned
+a plain status, so the app reported success after a failed download exactly as
+after a successful install. The daemon's own log recorded "Could not obtain the
+new binary; keeping 1.104.1" at the moment the app claimed Done.
+
+It now reports the version either side of the run and the state the updater
+recorded, and fails with the reason when the run did not succeed. The row
+checks first: if the running version is already the latest it says so and stops,
+instead of downloading a binary and restarting a daemon to change nothing.
+
+`available` is now a real JSON boolean in both branches. The fallback branch
+hardcoded it to true, so a dry-run naming the version already installed
+reported an available update whose `latest` equalled `current`.
+
 ## v1.0.17
 
 ### The received-files count was wired to a handler that did not exist
