@@ -1,7 +1,7 @@
 id=paras-tailscaled
-name=Magisk Tailscaled
-version=v1.0.21
-versionCode=01000021
+name=Tailscaled Reborn
+version=v1.0.22
+versionCode=01000022
 author=paras-moharle
-description=Tailscale. The easiest, most secure way to use WireGuard and 2FA.
+description=Runs the Tailscale daemon on a rooted phone, with an app for sending files and a desktop integration.
 updateJson=https://raw.githubusercontent.com/paras-moharle/tailscaled-reborn/main/update.json

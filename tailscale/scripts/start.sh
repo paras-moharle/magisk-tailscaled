@@ -35,7 +35,7 @@ start_receiver() {
 }
 
 module_version=$(busybox awk -F'=' '!/^ *#/ && /version=/ { print $2 }' "$TS_MOD_PROP" 2>/dev/null)
-log Info "Magisk Tailscaled version : ${module_version}."
+log Info "Tailscaled Reborn version : ${module_version}."
 start_service
 start_inotifyd
 start_receiver

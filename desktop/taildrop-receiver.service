@@ -1,5 +1,5 @@
 [Unit]
-Description=Taildrop receiver (pull Taildrop deliveries into ~/Downloads/Tailscale)
+Description=Taildrop receiver (collect Taildrop deliveries into ~/Downloads/Tailscale)
 Documentation=https://github.com/paras-moharle/tailscaled-reborn
 After=network-online.target
 Wants=network-online.target

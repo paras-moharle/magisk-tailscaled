@@ -24,12 +24,32 @@ arch="arm64"
 say() { printf '%s\n' "$*"; }
 
 # --- app ---------------------------------------------------------------------
-if [ ! -f "$root/share-app/build/TailBridge.apk" ]; then
-	say "==> building TailBridge"
-	"$root/share-app/build.sh" >/dev/null
-fi
+# Always rebuild, and then check the APK agrees with module.prop.
+#
+# This used to build only when the APK was absent, so a stale one was packaged
+# without a word. Because build.sh stamps the version in from module.prop, an
+# APK built before a version bump reports the *previous* version: v1.0.21 was
+# released carrying an app that called itself v1.0.20. Nobody noticed for a
+# release because nothing compared the two.
 apk="$root/share-app/build/TailBridge.apk"
+say "==> building TailBridge"
+"$root/share-app/build.sh" >/dev/null
 [ -f "$apk" ] || { say "!! app APK missing"; exit 1; }
+
+mod_version="$(sed -n 's/^version=//p' "$root/module.prop" | head -1)"
+apk_version=""
+if command -v aapt >/dev/null 2>&1; then
+	apk_version="$(aapt dump badging "$apk" 2>/dev/null |
+		sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)"
+elif command -v aapt2 >/dev/null 2>&1; then
+	apk_version="$(aapt2 dump badging "$apk" 2>/dev/null |
+		sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)"
+fi
+if [ -n "$apk_version" ] && [ "$apk_version" != "$mod_version" ]; then
+	say "!! the app reports $apk_version but module.prop says $mod_version"
+	say "!! rebuild share-app/build.sh after changing the version, then retry"
+	exit 1
+fi
 
 # --- stage -------------------------------------------------------------------
 say "==> staging"
