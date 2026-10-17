@@ -2144,9 +2144,12 @@ public class MainActivity extends Activity {
 					}
 					String url = r.optString("url", "");
 					if (url.isEmpty()) {
+						String raw = r.optString("raw", "").trim();
 						alert()
 								.setTitle(R.string.sign_in)
-								.setMessage(r.optString("raw", getString(R.string.no_login_url)).trim())
+								.setMessage(raw.isEmpty()
+										? getString(R.string.no_login_url)
+										: raw)
 								.setPositiveButton(android.R.string.ok, null)
 								.show();
 						return;

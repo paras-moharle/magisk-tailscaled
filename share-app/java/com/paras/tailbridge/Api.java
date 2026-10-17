@@ -29,7 +29,22 @@ final class Api {
 		}
 	}
 
+	/**
+	 * Run one API command and parse its JSON.
+	 *
+	 * <p>Most commands are a status read that answers in well under a second.
+	 * A daemon that is mid-restart, or an unreachable control plane, can hang
+	 * the shell instead, and this runs behind the UI, so the common case gets a
+	 * short budget and fails visibly instead of leaving a spinner up. login is
+	 * the one caller that waits on a person, and says so by passing its own.
+	 */
+	private static final long DEFAULT_TIMEOUT_MS = 30_000;
+
 	private static JSONObject call(String... args) throws Exception {
+		return call(DEFAULT_TIMEOUT_MS, args);
+	}
+
+	private static JSONObject call(long timeoutMs, String... args) throws Exception {
 		StringBuilder cmd = new StringBuilder(PATH);
 		for (String a : args) {
 			// The API re-validates everything; quote anyway so a filename with a
@@ -38,7 +53,7 @@ final class Api {
 		}
 		String out;
 		try {
-			out = Root.sh(cmd.toString(), 240_000).trim();
+			out = Root.sh(cmd.toString(), timeoutMs).trim();
 		} catch (Root.Denied d) {
 			// Genuinely no root. The caller shows the permission screen.
 			throw d;
@@ -143,10 +158,6 @@ final class Api {
 		return call("set", key, value);
 	}
 
-	/** Round-trip time and path to a peer. */
-	static JSONObject ping(String ip) throws Exception {
-		return call("ping", ip);
-	}
 
 	/** What the Taildrop receiver collected while the app was away. */
 	static JSONObject received() throws Exception {
@@ -158,12 +169,20 @@ final class Api {
 		return call("service", action);
 	}
 
+	/**
+	 * Download, install and health-check a new daemon, rolling back on failure.
+	 *
+	 * <p>Genuinely slow: a binary download, a daemon restart and a settle
+	 * window. It gets its own budget so the short read timeout does not kill it
+	 * halfway and leave the module in an unknown state.
+	 */
 	static JSONObject update() throws Exception {
-		return call("update");
+		return call(600_000, "update");
 	}
 
+	/** Restore the previous daemon. Also restarts and health-checks. */
 	static JSONObject rollback() throws Exception {
-		JSONObject o = call("rollback");
+		JSONObject o = call(600_000, "rollback");
 		return o;
 	}
 
@@ -173,8 +192,9 @@ final class Api {
 	}
 
 	/** @return {url, alreadyLoggedIn} */
+	/** Start a browser login. Waits on a person, so it gets the long budget. */
 	static JSONObject login() throws Exception {
-		return call("login");
+		return call(240_000, "login");
 	}
 
 	static JSONObject logout() throws Exception {

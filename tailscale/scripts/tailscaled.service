@@ -357,10 +357,10 @@ _log(){
 _troubleshoot(){
   echo "${red}Not yet ready!${normal}";
   echo "${orange}Solution: ${yellow}Read the log and fix the reported error:${normal}";
-  echo "  ${green}logs.sh${normal}        # follow the daemon log";
-  echo "  ${green}status${normal}         # backend, login state, installed version";
-  echo "  ${green}check${normal}          # whether an update is available";
-  echo "${orange}Then start the daemon again: ${yellow}service.sh start${normal}";
+  echo "  ${green}tailscaled.service log daemon${normal}  # follow the daemon log";
+  echo "  ${green}tailscaled.service status${normal}      # backend, login state, installed version";
+  echo "  ${green}tailscaled.update check${normal}        # whether an update is available";
+  echo "${orange}Then start the daemon again: ${yellow}tailscaled.service start${normal}";
 }
 usage(){
     cmd="$1"
@@ -488,7 +488,7 @@ case "$1" in
   *)
     if [ -n "$1" ]; then
       echo "${yellow}${scripts_name} ${orange}$1 ${red}not found${normal}, run ${yellow}${scripts_name} help${normal} for all commands"
-      return
+      exit 0
     fi
     usage
     ;;

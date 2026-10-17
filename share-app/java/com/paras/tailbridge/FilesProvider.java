@@ -112,7 +112,7 @@ public class FilesProvider extends ContentProvider {
 			return null;
 		}
 		if (seg.size() == 1 && DIR.equals(seg.get(0))) {
-			return "resource/folder";
+			return "vnd.android.document/directory";
 		}
 		try {
 			File f = resolve(seg.get(seg.size() - 1));

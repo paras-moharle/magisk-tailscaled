@@ -1,3 +1,70 @@
+## v1.0.17
+
+### The received-files count was wired to a handler that did not exist
+
+The app asked the API for the last Taildrop delivery and displayed "N files
+received while you were away". The API script dispatched that command to a
+function that was never written, so the call returned a shell error, the app
+caught it, and the count stayed at zero with nothing on screen to say why.
+
+The handler is now implemented, reading the file the receiver writes. It parses
+`at=`, `count=`, `names=` and `dir=` as the key/value lines they actually are.
+It had been read as JSON, which fails silently and would have kept the count at
+zero even with the handler present. The reply is flat, because that is what the
+app reads.
+
+### Peer ping: removed rather than finished
+
+A ping handler was written for this version. The feature was already gone from
+the app and nobody called it, so it was deleted instead of shipped. One less
+way to be wrong about an endpoint's behaviour.
+
+### The Nautilus extension no longer runs a permanent poller
+
+The menu read a peer list from a background thread re-querying every 3 seconds
+for the whole life of the file manager, and also queried again on every
+right-click. So it paid for a query nobody was reading, and the menu's contents
+still depended on when that thread happened to run. Adding a device and
+right-clicking could easily show a list that did not include it.
+
+The list is now fetched when a menu opens, and reused only if it is under five
+seconds old. A failed query no longer empties a menu that worked a moment ago.
+Peer IPs are still resolved fresh at send time, because a tailnet IP changes
+when a device re-registers and sending to a stale one loses the file.
+
+### The Linux receiver was watching an inbox the daemon stopped filling
+
+Same mistake as the phone, in `~/.local/bin/taildrop-receiver`: it looped on
+`tailscale file get`, which returns nothing on a current daemon because
+deliveries arrive directly in `~/Downloads/Taildrop`. Files arrived and were
+never announced, which is exactly how `proof.txt` ended up sitting in
+`~/Downloads/` unclaimed.
+
+It now sweeps the delivery directory as well as the inbox, with the same
+persistent seen-list as the phone: a name-based record that survives restarts,
+so a file arriving between two sweeps is still announced. First run adopts what
+is already on disk instead of announcing a backlog.
+
+### A read that hangs now fails in 30 seconds
+
+Every API call shared login's 240-second budget, because login waits on a person
+opening a link. A status read answers in well under a second normally, but a
+daemon mid-restart can hang the shell, and that left the UI waiting four
+minutes with no way to tell a slow phone from a dead one. Reads get 30 seconds;
+update and rollback keep a long budget because they really do take minutes.
+
+### Smaller corrections
+
+- A failed login showed an alert with an empty body, because the fallback
+  string was only used when the key was absent, not when it was blank.
+- Folders were reported as `resource/folder`, which is not a MIME type any
+  other component recognises. Now the standard document-directory type.
+- `tailscaled.service` help pointed at `logs.sh` and `service.sh`, neither of
+  which exists. Now the commands that do.
+- An unknown subcommand ran `return` at the top level of the script.
+- A comment claimed the installer and the updater read the same repository. They
+  read two, which both carry the same assets. The comment says so now.
+
 ## v1.0.16
 
 ### Taildrop was not broken. It was landing somewhere nobody looked.

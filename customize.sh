@@ -66,9 +66,13 @@ SERVICE_DIR="/data/adb/service.d"
 # module happened to bundle when it was released.
 # The daemon builds are published as release assets of the archived
 # tailscale-android-cli repo, which is where build-binaries.sh has always
-# uploaded them. The feed pointer in this repo's tailscale-latest.json names
-# that repo explicitly, and the updater on the device reads the same feed, so
-# installer and updater can never disagree about where the binary lives.
+# uploaded them.
+#
+# The on-device updater reads tailscale-latest.json, whose "repo" field names
+# this repo (tailscaled-reborn). Both repos carry the same assets and the same
+# SHA256SUMS for a given daemon tag, so the installer and the updater both
+# fetch a byte-identical binary. They are separate repositories by history, not
+# by design, but they are kept in step by tagging both.
 TS_BIN_REPO="paras-moharle/tailscale-android-cli"
 
 TS_DIR="/data/adb/tailscale"

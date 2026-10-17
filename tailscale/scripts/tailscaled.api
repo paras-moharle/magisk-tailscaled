@@ -293,8 +293,16 @@ api_update_check() {
 		printf '{"ok":false,"error":"rate limited by GitHub; try again later"}\n'
 		;;
 	*)
-		_lv2="$(printf '%s' "$_out" | sed -n 's/.*to \([0-9][^ ;]*\).*/\1/p' | head -1)"
-		[ -n "$_lv2" ] || _lv2="unknown"
+		# Parse "Update available: 1.105.0" or "a newer version (1.105.0) is available"
+		# or "to 1.105.0" from the dry-run output. Try multiple patterns.
+		_lv2="$(printf '%s\n' "$_out" | \
+			sed -n \
+				-e 's/.*[Uu]pdate [aA]vailable: \([0-9.]*\).*/\1/p' \
+				-e 's/.*to \([0-9][0-9.]*\).*/\1/p' \
+				-e 's/.*newer version (\([0-9.]*\)).*/\1/p' \
+				-e 's/.*version \([0-9][0-9.]*\) is.*/\1/p' \
+			| head -1)"
+		[ -n "$_lv2" ] || _lv2="$_cur"
 		printf '{"ok":true,"current":%s,"latest":%s,"available":true,"source":"binary"}\n' \
 			"$("$JQ" -Rn --arg c "$_cur" '$c')" "$("$JQ" -Rn --arg l "$_lv2" '$l')"
 		;;
@@ -542,7 +550,32 @@ receive)
 	api_receive "$@"
 	;;
 received)
-	api_received
+	# Return what the receive loop recorded last.
+	# tailscaled.receive writes ${TS_RUN_DIR}/last-received every time new
+	# arrivals are exported. Return its content so the app can show
+	# "N files arrived while you were away".
+	#
+	# last-received is written by tailscaled.receive as `key=value` lines
+	# (at=, count=, names=, dir=), not as JSON. Reading it with `jq .` fails,
+	# and because that failure was swallowed the count read as zero forever.
+	_LR="${TS_RUN_DIR}/last-received"
+	_lr_val() { grep -m1 "^$1=" "$_LR" 2>/dev/null | cut -d= -f2-; }
+	_at=$(_lr_val at | tr -dc '0-9')
+	_count=$(_lr_val count | tr -dc '0-9')
+	_names=$(_lr_val names)
+	_dir=$(_lr_val dir)
+	case "${_at:-}" in '' | *[!0-9]*) _at=0 ;; esac
+	case "${_count:-}" in '' | *[!0-9]*) _count=0 ;; esac
+	# jq does the quoting, so names with spaces or quotes survive; an empty
+	# list has to stay [] and not null.
+	_json_names=$(printf '%s' "${_names:-}" | tr ',' '\n' |
+		"$JQ" -R -n '[inputs | select(length > 0)]' 2>/dev/null)
+	case "${_json_names:-}" in '' | null) _json_names='[]' ;; esac
+	# Flat, because the app reads count off the top level.
+	printf '{"ok":true,"count":%s,"at":%s,"dir":%s,"names":%s}\n' \
+		"${_count:-0}" "${_at:-0}" \
+		"$("$JQ" -Rn --arg d "${_dir:-${TS_TAILDROP_DIR}}" '$d')" \
+		"${_json_names:-[]}"
 	;;
 logs)
 	shift

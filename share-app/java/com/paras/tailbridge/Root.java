@@ -44,7 +44,7 @@ final class Root {
 		}
 	}
 
-	static String sh(String cmd, int timeoutMs) throws Exception {
+	static String sh(String cmd, long timeoutMs) throws Exception {
 		final Process p = start();
 
 		// Do NOT block on the shell exiting: root managers keep the session
