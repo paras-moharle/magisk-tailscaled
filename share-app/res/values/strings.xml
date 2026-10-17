@@ -155,5 +155,4 @@
 	<string name="received_files_row">Received files (%d)</string>
 	<string name="received_files_row_none">Received files</string>
 	<string name="taildrop_folder_sub">Downloads/Tailscale, automatically</string>
-	<string name="share_target_subtitle">Send to a Tailscale device</string>
 </resources>

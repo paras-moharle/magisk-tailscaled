@@ -99,42 +99,8 @@ public class MainActivity extends Activity {
 
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
-		// A share is not a request to open the app. Detect it from the intent
-		// before anything is built, because the theme has to be in place before
-		// the window exists.
-		android.content.Intent in = getIntent();
-		boolean share = in != null && in.getAction() != null
-				&& (android.content.Intent.ACTION_SEND.equals(in.getAction())
-					|| android.content.Intent.ACTION_SEND_MULTIPLE.equals(in.getAction()));
-		// A share is not a request to open the app. Detect it from the intent
-		// before anything is built, because the theme has to be set before the
-		// window exists.
-		android.content.Intent incoming = getIntent();
-		boolean shared = incoming != null && incoming.getAction() != null
-				&& (android.content.Intent.ACTION_SEND.equals(incoming.getAction())
-					|| android.content.Intent.ACTION_SEND_MULTIPLE.equals(incoming.getAction()));
-		if (shared) {
-			// Translucent window: the system fades it in instead of animating an
-			// activity opening, which is the whole difference between a picker
-			// and being dropped into an app.
-			setTheme(R.style.Theme_Share_Popup);
-			getWindow().setBackgroundDrawable(null);
-		}
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_main);
-		if (shared) {
-			// Nothing behind the picker is painted. The window is translucent,
-			// so the app you shared from stays on screen behind the dialog: the
-			// Gallery is still the Gallery while you pick a machine. The app's
-			// own AMOLED black is for the app itself, not for someone else's
-			// screen showing through.
-			android.view.ViewGroup content =
-					(android.view.ViewGroup) findViewById(android.R.id.content);
-			if (content != null && content.getChildCount() > 0) {
-				((android.view.ViewGroup) content.getChildAt(0))
-						.setBackgroundColor(0x00000000);
-			}
-		}
 
 		statusView = findViewById(R.id.status);
 		versionView = findViewById(R.id.version);
@@ -1120,39 +1086,6 @@ public class MainActivity extends Activity {
 		ui.postDelayed(poll, POLL_MS);
 	}
 
-	/**
-	 * Hide the app's own furniture when the launch came from the share sheet.
-	 *
-	 * <p>Called from more than one place because render() and tab() both reset
-	 * the nav bar's visibility on their way through. Setting it once in onCreate
-	 * was undone by the first repaint, which is why the share still showed the
-	 * full app.
-	 */
-	private void applyShareChrome() {
-		if (!shareLaunch) {
-			return;
-		}
-		View h = findViewById(R.id.header);
-		if (h != null) {
-			h.setVisibility(View.GONE);
-		}
-		View n = findViewById(R.id.navBar);
-		if (n != null) {
-			n.setVisibility(View.GONE);
-		}
-		// Clear the app's own surface, not just its chrome. Leaving "THIS
-		// DEVICE" and the daemon switches visible behind the picker is what
-		// still read as being dropped into the app: the dialog floated on top
-		// of a control panel instead of appearing where the share sheet was.
-		for (int id : new int[] { R.id.scrollSend, R.id.scrollSettings,
-				R.id.scrollSystem }) {
-			View v = findViewById(id);
-			if (v != null) {
-				v.setVisibility(View.GONE);
-			}
-		}
-	}
-
 	private void stopPolling() {
 		ui.removeCallbacks(poll);
 	}
@@ -1161,8 +1094,6 @@ public class MainActivity extends Activity {
 		((ScrollView) findViewById(R.id.scrollSend)).setFillViewport(false);
 		pSend.setGravity(Gravity.NO_GRAVITY);
 		findViewById(R.id.navBar).setVisibility(View.VISIBLE);
-		((ScrollView) findViewById(R.id.scrollSend)).setVisibility(View.VISIBLE);
-		applyShareChrome();
 		applyHeader(st);
 
 		List<Api.Peer> ps = Api.peersFrom(st);
@@ -1666,17 +1597,6 @@ public class MainActivity extends Activity {
 							.setMessage(getString(R.string.sent_partial, fOk, fFailed) + "\n\n" + p)
 							.setPositiveButton(android.R.string.ok, null)
 							.show();
-				}
-				// Sharing is a round trip: pick a device, send, get out of the
-				// way. Leaving the transparent window on top of the Gallery or
-				// the browser is what made it feel like being redirected into
-				// an app instead of using one.
-				if (shareLaunch && fFailed == 0) {
-					finish();
-					// Fade out. The default close animation would slide the
-					// window away and read as leaving an app.
-					overridePendingTransition(0, 0);
-					return;
 				}
 				// Re-read so the staged-items note clears once it is sent.
 				refresh();

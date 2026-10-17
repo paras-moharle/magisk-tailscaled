@@ -30,34 +30,26 @@ Names are now recorded in a list that survives restarts. The first run adopts
 what is already on disk, so installing the module does not announce a backlog,
 but anything arriving later is announced even if the receiver was not running.
 
-### Sharing from another app no longer opens the app
+### A share-capable rework was tried and pulled the same evening
 
-TailBridge is now a **direct share target**: the sheet renders it itself, so
-tapping it puts the device picker over the app you shared from, which stays
-put. Previously the sheet launched an activity, the system animated it forward
-and pushed your app into the background, so even a transparent window felt like
-being taken somewhere.
+The released v1.0.16 zip briefly carried two share-sheet experiments: a
+translucent share window that hid the app's own chrome and launched with
+`noHistory`, `excludeFromRecents` and an empty `taskAffinity`, and then a
+direct-share target built against compile-only stubs of the hidden
+`android.service.chooser` API. Both were pulled before v1.0.17.
 
-Direct share needs `android.service.chooser.ChooserTargetService`, which is a
-hidden API absent from the public SDK. The build compiles against declarations
-kept in `share-app/stubs/` and drops them before dexing, with a guard that
-fails the build if one ever reaches the APK. The platform supplies the real
-classes at runtime, so nothing of ours shadows anything of its.
-
-Some skins hide direct share behind a toggle in the share sheet's overflow menu.
-If TailBridge does not appear in the sheet's top row, look for it there.
-
-The activity path still exists as a fallback, and now leaves no trace: out of
-recents, out of the sending app's task, gone the moment it closes.
-
-Sharing a photo put you in TailBridge: a zoom-in transition, the Send tab, a
-header, a nav bar, and the device picker floating on top of all it. It read as
-being redirected into an app rather than using one.
-
-A share launch is now a translucent window with the app's own chrome hidden, so
-the picker appears over whatever you shared from and the system fades it in
-instead of animating an activity opening. Sending returns you to the app you
-came from.
+The launch flags lived on the activity that is both the launcher icon and the
+share target. `noHistory` destroys the app's only activity whenever it leaves
+the foreground, `excludeFromRecents` means there is no recents entry to come
+back to, and `taskAffinity=""` detaches it from every task — three ways of
+making the app not persist while it is being used. Tapping Check for update
+(which restarts the daemon behind a long status poll) made this visible as a
+glitching UI and lost nav state; the app had to be closed the hard way. The
+tinted share window read as broken rather than as a picker, and the device
+picker itself was more machinery than the job needs. Sharing now behaves as it
+did in v1.0.15: the sheet opens TailBridge on the Send tab with the picker
+ready. The hidden-API stubs, the popup theme and every launch flag are gone
+from the manifest, the code and the build.
 
 The app itself is now true AMOLED black. The page was `#0C0F13`, a dark
 blue-grey: lit pixels on an OLED panel, and a dark image scrolling past smears.

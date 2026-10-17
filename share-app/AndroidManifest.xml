@@ -43,20 +43,6 @@
 		<!--
 		  One activity for everything.
 
-		  noHistory, excludeFromRecents and an empty taskAffinity exist for the
-		  share path. Tapping this in another app's share sheet has to start an
-		  activity. That is the platform, not a choice here, so the best that
-		  can be done is make it leave no trace: it does not appear in recents,
-		  it does not join the sending app's task, and it is gone the moment it
-		  closes. What remains is a translucent window over the app you shared
-		  from, which stays on screen behind the device picker.
-
-		  Rendering the picker inside the sheet itself would need
-		  android.service.chooser.ChooserTargetService, which is a hidden API
-		  absent from the public SDK. Compiling against a hand-made stub of it
-		  risks the class colliding with the platform's own at runtime, so it is
-		  not worth it to save an animation.
-
 		  It is both the launcher icon and the share target, so "Share to
 		  Tailscale" from Gallery, Files or a browser lands on the same Send
 		  screen the app already uses — there is no separate share UI and no
@@ -73,9 +59,6 @@
 			android:exported="true"
 			android:launchMode="singleTask"
 			android:configChanges="uiMode|orientation|screenSize|keyboardHidden"
-			android:taskAffinity=""
-			android:noHistory="true"
-			android:excludeFromRecents="true"
 			android:label="@string/app_name">
 
 			<intent-filter>
@@ -96,21 +79,8 @@
 				<category android:name="android.intent.category.DEFAULT" />
 				<data android:mimeType="*/*" />
 			</intent-filter>
-			<meta-data
-				android:name="android.app.direct_share"
-				android:resource="@xml/direct_share_targets" />
 		</activity>
 
-		<!-- Backs the direct-share target above. BIND_CHOOSER_TARGET_SERVICE is
-		     what lets the system chooser bind it and nothing else. -->
-		<service
-			android:name=".ShareTargetService"
-			android:exported="true"
-			android:permission="android.permission.BIND_CHOOSER_TARGET_SERVICE">
-			<intent-filter>
-				<action android:name="android.service.chooser.CHOOSER_TARGET_SERVICE" />
-			</intent-filter>
-		</service>
 
 		<!--Taildrop arrival alerts.
 		     exported because the receiver script runs as root, outside the app,

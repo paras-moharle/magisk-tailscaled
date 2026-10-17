@@ -80,10 +80,7 @@ echo "    version $MOD_VERSION ($MOD_VERSION_CODE)"
 
 # ------------------------------------------------------------------- code
 echo "==> compiling java"
-# stubs/ holds declarations for hidden platform APIs that are absent from the
-# public android.jar. They are compiled so the code can be type-checked, and
-# excluded from the dex below so the real platform classes are used at runtime.
-find "$HERE/java" "$OUT/gen" "$HERE/stubs" -name '*.java' > "$OUT/sources.txt"
+find "$HERE/java" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
 # --release rather than -source/-target/-bootclasspath: JDK 12+ rejects the
 # old bootclasspath form. android.jar still supplies every android.* and
 # org.json.* class the app uses.
@@ -94,21 +91,13 @@ javac -nowarn \
 	@"$OUT/sources.txt"
 
 echo "==> dexing"
-# Anything under android/service/chooser/ is a stub and must not be packaged.
-# Shipping one would shadow the platform's own class and break the share sheet.
-find "$OUT/classes" -name '*.class' \
-	-not -path "$OUT/classes/android/service/chooser/*" > "$OUT/classes.txt"
+find "$OUT/classes" -name '*.class' > "$OUT/classes.txt"
 [ -s "$OUT/classes.txt" ] || { echo "!! javac produced no classes" >&2; exit 1; }
 "$BT/d8" --release --min-api 26 --lib "$JAR" \
 	--output "$OUT/dex" \
 	@"$OUT/classes.txt"
 
 [ -f "$OUT/dex/classes.dex" ] || { echo "!! d8 produced no classes.dex" >&2; exit 1; }
-if find "$OUT/classes/android/service/chooser" -name '*.class' 2>/dev/null | grep -q . &&
-	grep -q "$OUT/classes/android/service/chooser" "$OUT/classes.txt"; then
-	echo "!! a hidden-API stub leaked into the dex" >&2
-	exit 1
-fi
 
 # ------------------------------------------------------------------ package
 echo "==> packaging"
