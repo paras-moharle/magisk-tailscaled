@@ -123,10 +123,19 @@ sweep() {
             note_stuck "$f"
         fi
     done
-    if [ "$count" -gt 0 ] && command -v notify-send >/dev/null 2>&1; then
+    if [ "$count" -gt 0 ]; then
         _sum="$(printf '%s' "$names" | cut -d, -f1-3 | sed 's/, */, /g')"
         [ "$count" -gt 3 ] && _sum="$_sum, and $((count - 3)) more"
-        notify-send -a "Taildrop" "Received $count file(s)" "$_sum — $DEST"
+        if command -v notify-send >/dev/null 2>&1; then
+            if notify-send -a "Taildrop" -u critical \
+                    "Received $count file(s)" "$_sum — $DEST"; then
+                log "notified: $_sum"
+            else
+                log "notify-send FAILED (exit $?) for: $_sum"
+            fi
+        else
+            log "notify-send is not installed; no alert was shown"
+        fi
     fi
 }
 
