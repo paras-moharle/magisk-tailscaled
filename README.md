@@ -58,10 +58,15 @@ systemctl --user enable --now taildrop-receiver.service
 
 **On macOS and Windows** the official Tailscale app already does this.
 
-> **Already have one?** Omarchy ships its own receiver
-> (`/usr/bin/omarchy-tailscale-receive`). Two collectors watching the same
-> directory will race for the same file, so use one or the other. To see which
-> is running: `pgrep -af 'taildrop|omarchy-tailscale'`.
+> **Already have one?** Omarchy ships its own receiver. Two collectors
+> watching the same directory race for the same file, so use one or the other.
+> To keep this one:
+>
+> ```sh
+> systemctl --user disable --now omarchy-tailscale-receive.service
+> ```
+>
+> To check what is running: `pgrep -af 'taildrop|omarchy-tailscale'`.
 
 ---
 
